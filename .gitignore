@@ -1,0 +1,5 @@
+# Exclude all files and directories starting with .
+.*
+
+# But keep .gitignore itself
+!.gitignore
