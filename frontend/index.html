@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekend Planner</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Onboarding Screen -->
+        <div id="onboarding" class="screen active">
+            <div class="container">
+                <h1>🎉 Weekend Planner</h1>
+                <p class="subtitle">Get personalized weekend ideas every Friday</p>
+                
+                <form id="onboarding-form">
+                    <div class="form-group">
+                        <label>Planning Mode</label>
+                        <select id="planning-mode" required>
+                            <option value="family">Family</option>
+                            <option value="individual">Individual</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Home Location</label>
+                        <input type="text" id="home-location" placeholder="San Francisco, CA" value="San Francisco, CA" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Search Radius (miles)</label>
+                        <input type="number" id="radius" value="10" min="1" max="50" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Categories (select at least one)</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="categories" value="parks" checked> Parks</label>
+                            <label><input type="checkbox" name="categories" value="museums" checked> Museums</label>
+                            <label><input type="checkbox" name="categories" value="attractions" checked> Attractions</label>
+                            <label><input type="checkbox" name="categories" value="food"> Food</label>
+                            <label><input type="checkbox" name="categories" value="events"> Events</label>
+                        </div>
+                        <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
+                            <strong>Note:</strong> Currently, only Parks, Museums, and Attractions have recommendations available.
+                        </p>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="kid-friendly" checked>
+                            Kid-friendly activities
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Friday notification time</label>
+                        <input type="time" id="notification-time" value="16:00" required>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">Get Started</button>
+                    <div style="text-align: center; margin-top: 1rem;">
+                        <button type="button" onclick="skipOnboarding()" class="btn btn-secondary" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Or use defaults</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Main Planner Screen -->
+        <div id="planner" class="screen">
+            <div class="container">
+                <header>
+                    <h1>Weekend Planner</h1>
+                    <div class="header-actions">
+                        <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
+                        <button id="settings-btn" class="btn btn-secondary">Settings</button>
+                    </div>
+                </header>
+                
+                <div id="digest-container">
+                    <div class="loading" id="loading">Loading weekend ideas...</div>
+                    <div id="digest-items" class="digest-grid"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Recommendation Detail Modal -->
+        <div id="detail-modal" class="modal">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <div id="detail-content"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
