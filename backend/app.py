@@ -569,6 +569,149 @@ def pause_notifications():
 
 # ========== AUTH ==========
 
+# Simple token storage (use proper JWT in production)
+auth_tokens = {}
+
+@app.route('/v1/auth/signup', methods=['POST'])
+def signup():
+    """Create a new user account"""
+    data = request.json
+    method = data.get('method', 'email')
+    
+    if method == 'email':
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return jsonify({"error": "Email and password required"}), 400
+        
+        if len(password) < 8:
+            return jsonify({"error": "Password must be at least 8 characters"}), 400
+        
+        # Check if user exists
+        if email in users_db:
+            return jsonify({"error": "User already exists"}), 409
+        
+        # Create user
+        user_id = f"user_{len(users_db) + 1}_{datetime.now().timestamp()}"
+        users_db[email] = {
+            "user_id": user_id,
+            "email": email,
+            "password": password,  # In production, hash this!
+            "created_at": datetime.now().isoformat(),
+            "email_digest": data.get('email_digest', True)
+        }
+        
+        # Create token
+        token = f"token_{user_id}_{datetime.now().timestamp()}"
+        auth_tokens[token] = user_id
+        
+        return jsonify({
+            "user_id": user_id,
+            "token": token,
+            "status": "created"
+        })
+    
+    return jsonify({"error": "Invalid auth method"}), 400
+
+@app.route('/v1/auth/login', methods=['POST'])
+def login():
+    """Login with email/password"""
+    data = request.json
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return jsonify({"error": "Email and password required"}), 400
+    
+    # Check credentials
+    user = users_db.get(email)
+    if not user or user.get('password') != password:
+        return jsonify({"error": "Invalid credentials"}), 401
+    
+    user_id = user['user_id']
+    
+    # Create token
+    token = f"token_{user_id}_{datetime.now().timestamp()}"
+    auth_tokens[token] = user_id
+    
+    # Get preferences
+    prefs = preferences_db.get(user_id)
+    
+    return jsonify({
+        "user_id": user_id,
+        "token": token,
+        "preferences": prefs,
+        "status": "authenticated"
+    })
+
+@app.route('/v1/auth/phone/request-otp', methods=['POST'])
+def request_phone_otp():
+    """Request OTP for phone authentication"""
+    data = request.json
+    phone = data.get('phone')
+    
+    if not phone:
+        return jsonify({"error": "Phone number required"}), 400
+    
+    # In production, send actual SMS
+    # For demo, just return success
+    return jsonify({"status": "otp_sent", "message": "Verification code sent"})
+
+@app.route('/v1/auth/phone/verify-otp', methods=['POST'])
+def verify_phone_otp():
+    """Verify OTP and authenticate"""
+    data = request.json
+    phone = data.get('phone')
+    code = data.get('code')
+    
+    if not phone or not code:
+        return jsonify({"error": "Phone and code required"}), 400
+    
+    # For demo, accept any 6-digit code or '123456'
+    if code != '123456' and len(code) != 6:
+        return jsonify({"error": "Invalid code"}), 401
+    
+    # Find or create user
+    is_new_user = phone not in users_db
+    
+    if is_new_user:
+        user_id = f"user_phone_{len(users_db) + 1}_{datetime.now().timestamp()}"
+        users_db[phone] = {
+            "user_id": user_id,
+            "phone": phone,
+            "created_at": datetime.now().isoformat()
+        }
+    else:
+        user_id = users_db[phone]['user_id']
+    
+    # Create token
+    token = f"token_{user_id}_{datetime.now().timestamp()}"
+    auth_tokens[token] = user_id
+    
+    # Get preferences
+    prefs = preferences_db.get(user_id)
+    
+    return jsonify({
+        "user_id": user_id,
+        "token": token,
+        "is_new_user": is_new_user,
+        "preferences": prefs,
+        "status": "authenticated"
+    })
+
+@app.route('/v1/auth/logout', methods=['POST'])
+def logout():
+    """Logout and invalidate token"""
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        if token in auth_tokens:
+            del auth_tokens[token]
+    
+    session.clear()
+    return jsonify({"status": "logged_out"})
+
 @app.route('/v1/auth/session', methods=['POST'])
 def create_session():
     """Create a demo session (replace with OAuth in production)"""
@@ -582,6 +725,41 @@ def get_session():
     """Get current session"""
     user_id = get_user_id()
     return jsonify({"user_id": user_id, "authenticated": bool(user_id)})
+
+# ========== USER PROFILE & PREFERENCES ==========
+
+@app.route('/v1/user/preferences', methods=['GET'])
+def get_user_preferences():
+    """Get user profile and preferences (for returning users)"""
+    auth_header = request.headers.get('Authorization')
+    
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        user_id = auth_tokens.get(token)
+        
+        if not user_id:
+            return jsonify({"error": "Invalid token"}), 401
+        
+        # Get user info
+        user_info = None
+        for identifier, user in users_db.items():
+            if user.get('user_id') == user_id:
+                user_info = {
+                    "id": user_id,
+                    "email": user.get('email'),
+                    "phone": user.get('phone')
+                }
+                break
+        
+        # Get preferences
+        prefs = preferences_db.get(user_id, {})
+        
+        return jsonify({
+            "user": user_info,
+            "preferences": prefs
+        })
+    
+    return jsonify({"error": "Authorization required"}), 401
 
 @app.route('/health', methods=['GET'])
 def health_check():

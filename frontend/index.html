@@ -8,8 +8,148 @@
 </head>
 <body>
     <div id="app">
-        <!-- Onboarding Screen -->
-        <div id="onboarding" class="screen active">
+        <!-- Auth Screen (Login/Signup) -->
+        <div id="auth-screen" class="screen">
+            <div class="container auth-container">
+                <!-- Login Form -->
+                <div id="login-form" class="auth-form active">
+                    <h1>🎉 Weekend Planner</h1>
+                    <p class="subtitle">Welcome back!</p>
+                    
+                    <div class="form-group">
+                        <label>Email or Phone</label>
+                        <input type="text" id="login-identifier" placeholder="hello@example.com or (555) 123-4567">
+                    </div>
+                    
+                    <div id="login-password-group" class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="login-password" placeholder="Enter your password">
+                    </div>
+                    
+                    <div id="login-otp-group" class="form-group hidden">
+                        <label>Enter 6-digit code</label>
+                        <div class="otp-inputs">
+                            <input type="text" maxlength="1" class="otp-input" data-index="0">
+                            <input type="text" maxlength="1" class="otp-input" data-index="1">
+                            <input type="text" maxlength="1" class="otp-input" data-index="2">
+                            <input type="text" maxlength="1" class="otp-input" data-index="3">
+                            <input type="text" maxlength="1" class="otp-input" data-index="4">
+                            <input type="text" maxlength="1" class="otp-input" data-index="5">
+                        </div>
+                        <button class="btn-link" onclick="resendOTP()">Didn't receive it? Resend code</button>
+                    </div>
+                    
+                    <div class="checkbox-row">
+                        <label><input type="checkbox" id="remember-me"> Remember me</label>
+                        <a href="#" onclick="showForgotPassword()" class="forgot-link">Forgot password?</a>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="handleLogin()">Sign In</button>
+                    
+                    <div class="auth-divider">
+                        <span>or sign in with</span>
+                    </div>
+                    
+                    <div class="oauth-buttons">
+                        <button class="btn btn-oauth" onclick="signInWithOAuth('google')">
+                            <span class="oauth-icon">G</span> Google
+                        </button>
+                        <button class="btn btn-oauth" onclick="signInWithOAuth('apple')">
+                            <span class="oauth-icon">🍎</span> Apple
+                        </button>
+                    </div>
+                    
+                    <p class="auth-switch">
+                        Don't have an account? <a href="#" onclick="showSignupForm()">Sign up</a>
+                    </p>
+                    
+                    <button class="btn-link" onclick="continueAsGuest()">Continue as guest</button>
+                </div>
+                
+                <!-- Signup Form -->
+                <div id="signup-form" class="auth-form">
+                    <h1>🎉 Weekend Planner</h1>
+                    <p class="subtitle">Get personalized weekend ideas</p>
+                    
+                    <div class="auth-method-toggle">
+                        <button class="toggle-btn active" data-method="email" onclick="setAuthMethod('email')">📧 Email</button>
+                        <button class="toggle-btn" data-method="phone" onclick="setAuthMethod('phone')">📱 Phone</button>
+                    </div>
+                    
+                    <!-- Email signup -->
+                    <div id="email-signup" class="signup-method active">
+                        <div class="form-group">
+                            <label>Email address</label>
+                            <input type="email" id="signup-email" placeholder="hello@example.com">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Create a password</label>
+                            <input type="password" id="signup-password" placeholder="At least 8 characters">
+                            <p class="input-hint">✓ At least 8 characters</p>
+                        </div>
+                        
+                        <div class="checkbox-row">
+                            <label><input type="checkbox" id="email-digest-optin" checked> Send me weekly digest emails</label>
+                        </div>
+                    </div>
+                    
+                    <!-- Phone signup -->
+                    <div id="phone-signup" class="signup-method">
+                        <div class="form-group">
+                            <label>Phone number</label>
+                            <div class="phone-input-group">
+                                <select id="country-code">
+                                    <option value="+1">+1</option>
+                                    <option value="+44">+44</option>
+                                    <option value="+86">+86</option>
+                                </select>
+                                <input type="tel" id="signup-phone" placeholder="(555) 123-4567">
+                            </div>
+                        </div>
+                        
+                        <div id="phone-otp-group" class="form-group hidden">
+                            <label>Enter 6-digit code sent to your phone</label>
+                            <div class="otp-inputs">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="0">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="1">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="2">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="3">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="4">
+                                <input type="text" maxlength="1" class="otp-input signup-otp" data-index="5">
+                            </div>
+                            <button class="btn-link" onclick="resendSignupOTP()">Resend code</button>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" id="signup-btn" onclick="handleSignup()">Create Account</button>
+                    
+                    <div class="auth-divider">
+                        <span>or continue with</span>
+                    </div>
+                    
+                    <div class="oauth-buttons">
+                        <button class="btn btn-oauth" onclick="signInWithOAuth('google')">
+                            <span class="oauth-icon">G</span> Google
+                        </button>
+                        <button class="btn btn-oauth" onclick="signInWithOAuth('apple')">
+                            <span class="oauth-icon">🍎</span> Apple
+                        </button>
+                    </div>
+                    
+                    <p class="auth-switch">
+                        Already have an account? <a href="#" onclick="showLoginForm()">Sign in</a>
+                    </p>
+                    
+                    <p class="terms-text">
+                        By continuing, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- First-Time Onboarding Screen -->
+        <div id="onboarding" class="screen">
             <div class="container onboarding-container">
                 <!-- Progress Indicator -->
                 <div class="progress-bar">
@@ -26,8 +166,8 @@
 
                 <!-- Step 1: Group Type -->
                 <div id="step-1" class="onboarding-step active" style="display: block;">
-                    <h1>🎉 Weekend Planner</h1>
-                    <p class="subtitle">Who are you planning weekends for?</p>
+                    <h2>Who are you planning weekends for?</h2>
+                    <p class="subtitle">This helps us personalize your recommendations</p>
                     
                     <div class="selection-grid">
                         <div class="selection-card" data-value="solo">
@@ -47,12 +187,13 @@
                             <div class="card-label">With Friends</div>
                         </div>
                     </div>
+                    
+                    <p class="save-indicator">💾 This will be saved to your account</p>
                 </div>
 
                 <!-- Step 2: Location -->
                 <div id="step-2" class="onboarding-step">
-                    <!-- Step 2a: Location prompt -->
-                    <div id="step-2a" class="substep active">
+                    <div id="step-2a" class="substep active" style="display: block;">
                         <h2>Where are you based?</h2>
                         <p class="subtitle">We'll use this to calculate travel times</p>
                         
@@ -65,7 +206,6 @@
                         <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
                     </div>
                     
-                    <!-- Step 2b: Manual entry -->
                     <div id="step-2b" class="substep">
                         <h2>How would you like to enter your location?</h2>
                         
@@ -82,7 +222,6 @@
                             </div>
                         </div>
                         
-                        <!-- ZIP input -->
                         <div id="zip-input-group" class="input-group hidden">
                             <label>Enter your ZIP code:</label>
                             <input type="text" id="zip-input" placeholder="94102" maxlength="10">
@@ -90,7 +229,6 @@
                             <button class="btn btn-primary" onclick="submitLocation('zip')">Continue →</button>
                         </div>
                         
-                        <!-- Address input -->
                         <div id="address-input-group" class="input-group hidden">
                             <label>Enter your address:</label>
                             <input type="text" id="address-input" placeholder="123 Main St, San Francisco, CA">
@@ -101,7 +239,6 @@
                         <button class="btn-link" onclick="showSubstep('2a')">← Back</button>
                     </div>
                     
-                    <!-- Step 2c: Save prompt -->
                     <div id="step-2c" class="substep">
                         <h2>✓ Location set!</h2>
                         <p class="location-display" id="location-display">📍 San Francisco, CA 94102</p>
@@ -117,7 +254,6 @@
                         <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
                     </div>
                     
-                    <!-- Step 2d: Travel preferences -->
                     <div id="step-2d" class="substep">
                         <h2>Travel Preferences</h2>
                         
@@ -195,6 +331,7 @@
                             </div>
                         </div>
                         
+                        <p class="save-indicator">💾 This will be saved to your account</p>
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
                     </div>
                 </div>
@@ -244,6 +381,7 @@
                     </div>
                     
                     <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
+                    <p class="save-indicator">💾 This will be saved to your account</p>
                     
                     <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
                     <button class="btn-link" onclick="goToStep(2)">← Back</button>
@@ -291,6 +429,8 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <p class="save-indicator">💾 This will be saved to your account</p>
                     
                     <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
                     <button class="btn-link" onclick="goToStep(3)">← Back</button>
@@ -348,21 +488,180 @@
                 </div>
             </div>
         </div>
+
+        <!-- Returning User Dashboard -->
+        <div id="dashboard" class="screen">
+            <div class="container dashboard-container">
+                <header class="dashboard-header">
+                    <h1>Weekend Planner</h1>
+                    <div class="header-actions">
+                        <button id="settings-btn" class="btn btn-secondary" onclick="showSettings()">Settings</button>
+                        <button id="signout-btn" class="btn btn-secondary" onclick="handleSignOut()">Sign Out</button>
+                    </div>
+                </header>
+                
+                <div class="welcome-banner">
+                    <h2>Welcome back, <span id="user-name">there</span>! 👋</h2>
+                    <p>Your preferences are ready. Adjust anything below or jump straight to recommendations.</p>
+                </div>
+                
+                <div class="preferences-summary">
+                    <div class="summary-header">
+                        <h3>Your Saved Preferences</h3>
+                        <button class="btn-link" onclick="editAllPreferences()">Edit All</button>
+                    </div>
+                    
+                    <!-- Location -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">📍</span>
+                            <span class="pref-title">Location</span>
+                            <button class="btn-edit" onclick="editPreference('location')">Edit</button>
+                        </div>
+                        <div class="pref-card-content">
+                            <p id="pref-location">San Francisco, CA 94102</p>
+                            <p class="pref-sublabel">Saved home location</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Planning For -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">👨‍👩‍👧‍👦</span>
+                            <span class="pref-title">Planning For</span>
+                            <button class="btn-edit" onclick="editPreference('group')">Edit</button>
+                        </div>
+                        <div class="pref-card-content">
+                            <p id="pref-group">Family with Kids</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Travel Preferences -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🚗</span>
+                            <span class="pref-title">Travel Preferences</span>
+                            <button class="btn-edit" onclick="editPreference('travel')">Edit</button>
+                        </div>
+                        <div class="pref-card-content">
+                            <p><strong>Transportation:</strong> <span id="pref-transport">Car, Transit</span></p>
+                            <p><strong>Max travel time:</strong> <span id="pref-travel-time">15-30 min</span></p>
+                            <p><strong>Departure:</strong> <span id="pref-departure">Saturday morning, Sunday morning</span></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Interests -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🎯</span>
+                            <span class="pref-title">Interests</span>
+                            <button class="btn-edit" onclick="editPreference('interests')">Edit</button>
+                        </div>
+                        <div class="pref-card-content">
+                            <div class="interest-tags" id="pref-interests">
+                                <span class="tag">🌲 Nature & Parks</span>
+                                <span class="tag">🎨 Arts & Culture</span>
+                                <span class="tag">🍽️ Food & Drinks</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Ideal Vibe -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🧘</span>
+                            <span class="pref-title">Ideal Vibe</span>
+                            <button class="btn-edit" onclick="editPreference('vibe')">Edit</button>
+                        </div>
+                        <div class="pref-card-content">
+                            <p><strong>Energy:</strong> <span id="pref-energy">Moderate (walking, exploring)</span></p>
+                            <p><strong>Time:</strong> <span id="pref-time-commit">Half-day (3-4 hours)</span></p>
+                            <p><strong>Budget:</strong> <span id="pref-budget">Under $50 per person</span></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Other Preferences -->
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">⚙️</span>
+                            <span class="pref-title">Other Preferences</span>
+                            <button class="btn-edit" onclick="editPreference('other')">Edit</button>
+                        </div>
+                        <div class="pref-card-content" id="pref-other">
+                            <p>✓ Kid-friendly activities</p>
+                            <p>✓ Stroller friendly</p>
+                            <p>Avoiding: Crowds, Long waits</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Adjustments -->
+                <div class="quick-adjustments">
+                    <h3>Quick Adjustments for This Weekend</h3>
+                    
+                    <div class="form-group">
+                        <label>Different location?</label>
+                        <select id="quick-location">
+                            <option value="">Use saved location</option>
+                            <option value="current">Use current location</option>
+                            <option value="custom">Enter new location...</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Planning for someone else?</label>
+                        <div class="quick-toggle-group">
+                            <button class="quick-toggle" data-value="solo">👤 Solo</button>
+                            <button class="quick-toggle" data-value="couple">👫 Couple</button>
+                            <button class="quick-toggle active" data-value="family">👨‍👩‍👧‍👦 Family</button>
+                            <button class="quick-toggle" data-value="friends">👥 Friends</button>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>More time this weekend?</label>
+                        <div class="quick-toggle-group">
+                            <button class="quick-toggle active" data-value="0-15">&lt; 15 min</button>
+                            <button class="quick-toggle active" data-value="15-30">15-30 min</button>
+                            <button class="quick-toggle" data-value="30-60">30-60 min</button>
+                            <button class="quick-toggle" data-value="60+">60+ day trip</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="btn btn-primary btn-large" onclick="showRecommendations()">
+                    🎉 Show This Weekend's Recommendations
+                </button>
+            </div>
+        </div>
         
-        <!-- Main Planner Screen -->
+        <!-- Main Planner Screen (Recommendations) -->
         <div id="planner" class="screen">
             <div class="container">
                 <header>
                     <h1>Weekend Planner</h1>
                     <div class="header-actions">
-                        <button id="refresh-btn" class="btn btn-secondary">Refresh</button>
-                        <button id="settings-btn" class="btn btn-secondary">Settings</button>
+                        <button id="back-to-dashboard" class="btn btn-secondary" onclick="showDashboard()">← Back</button>
+                        <button id="refresh-btn" class="btn btn-secondary" onclick="loadDigest()">Refresh</button>
                     </div>
                 </header>
                 
                 <div id="digest-container">
                     <div class="loading" id="loading">Loading weekend ideas...</div>
                     <div id="digest-items" class="digest-grid"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Edit Preference Modal -->
+        <div id="edit-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeEditModal()">&times;</span>
+                <h2 id="edit-modal-title">Edit Preference</h2>
+                <div id="edit-modal-content"></div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="savePreferenceEdit()">Save Changes</button>
                 </div>
             </div>
         </div>
