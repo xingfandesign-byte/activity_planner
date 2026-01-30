@@ -95,23 +95,45 @@ h2 {
     margin: 0 0.5rem;
 }
 
-/* Onboarding Steps */
+/* Onboarding Steps - Only show one at a time */
 .onboarding-step {
-    display: none;
+    display: none !important;
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    left: -9999px;
 }
 
 .onboarding-step.active {
-    display: block;
+    display: block !important;
+    visibility: visible;
+    opacity: 1;
+    position: relative;
+    left: 0;
     animation: fadeIn 0.3s ease;
 }
 
+/* Substeps within Step 2 */
 .substep {
-    display: none;
+    display: none !important;
+    visibility: hidden;
+    opacity: 0;
 }
 
 .substep.active {
-    display: block;
+    display: block !important;
+    visibility: visible;
+    opacity: 1;
     animation: fadeIn 0.3s ease;
+}
+
+/* Ensure only active step content is visible */
+#step-1, #step-2, #step-3, #step-4, #step-5 {
+    display: none !important;
+}
+
+#step-1.active, #step-2.active, #step-3.active, #step-4.active, #step-5.active {
+    display: block !important;
 }
 
 @keyframes fadeIn {

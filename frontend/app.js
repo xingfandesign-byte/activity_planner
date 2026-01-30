@@ -24,10 +24,48 @@ let onboardingData = {
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
+    initializeOnboarding();
     initializeAuth();
     setupEventListeners();
     checkSavedLocation();
 });
+
+// Ensure only step 1 is visible on load
+function initializeOnboarding() {
+    // Hide all steps
+    document.querySelectorAll('.onboarding-step').forEach(step => {
+        step.classList.remove('active');
+        step.style.display = 'none';
+    });
+    
+    // Show only step 1
+    const step1 = document.getElementById('step-1');
+    if (step1) {
+        step1.classList.add('active');
+        step1.style.display = 'block';
+    }
+    
+    // Hide all substeps in step 2
+    document.querySelectorAll('.substep').forEach(substep => {
+        substep.classList.remove('active');
+        substep.style.display = 'none';
+    });
+    
+    // Show only step 2a (for when step 2 becomes active)
+    const step2a = document.getElementById('step-2a');
+    if (step2a) {
+        step2a.classList.add('active');
+        step2a.style.display = 'block';
+    }
+    
+    // Reset progress bar
+    document.querySelectorAll('.progress-step').forEach((el, index) => {
+        el.classList.remove('active', 'completed');
+        if (index === 0) el.classList.add('active');
+    });
+    
+    currentStep = 1;
+}
 
 async function initializeAuth() {
     try {
@@ -173,9 +211,18 @@ function goToStep(step) {
         if (index + 1 === step) el.classList.add('active');
     });
     
-    // Show step
-    document.querySelectorAll('.onboarding-step').forEach(el => el.classList.remove('active'));
-    document.getElementById(`step-${step}`).classList.add('active');
+    // Hide ALL steps first (both class and inline style)
+    document.querySelectorAll('.onboarding-step').forEach(el => {
+        el.classList.remove('active');
+        el.style.display = 'none';
+    });
+    
+    // Show only the target step
+    const targetStep = document.getElementById(`step-${step}`);
+    if (targetStep) {
+        targetStep.classList.add('active');
+        targetStep.style.display = 'block';
+    }
     
     // Reset substeps for step 2
     if (step === 2) {
@@ -187,11 +234,24 @@ function goToStep(step) {
     }
     
     currentStep = step;
+    
+    // Scroll to top of container
+    document.querySelector('.onboarding-container')?.scrollTo(0, 0);
 }
 
 function showSubstep(substep) {
-    document.querySelectorAll('#step-2 .substep').forEach(el => el.classList.remove('active'));
-    document.getElementById(`step-${substep}`).classList.add('active');
+    // Hide all substeps (both class and inline style)
+    document.querySelectorAll('#step-2 .substep').forEach(el => {
+        el.classList.remove('active');
+        el.style.display = 'none';
+    });
+    
+    // Show target substep
+    const target = document.getElementById(`step-${substep}`);
+    if (target) {
+        target.classList.add('active');
+        target.style.display = 'block';
+    }
 }
 
 // Location handling
