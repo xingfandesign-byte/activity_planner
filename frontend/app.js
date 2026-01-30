@@ -1,160 +1,447 @@
-// Weekend Planner Frontend
+// Weekend Planner Frontend - Multi-Step Onboarding
 const API_BASE = 'http://localhost:5001/v1';
 
+// State
 let currentUser = null;
 let currentDigest = null;
+let currentStep = 1;
+let onboardingData = {
+    group_type: null,
+    home_location: null,
+    transportation: ['transit', 'car'],
+    departure_times: {
+        saturday: ['morning'],
+        sunday: ['morning']
+    },
+    travel_time_ranges: ['0-15', '15-30'],
+    interests: [],
+    energy_level: 'moderate',
+    time_commitment: 'half_day',
+    budget: 'moderate',
+    accessibility: [],
+    avoid: []
+};
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
     setupEventListeners();
+    checkSavedLocation();
 });
 
 async function initializeAuth() {
     try {
         const response = await fetch(`${API_BASE}/auth/session`);
-        if (!response.ok) {
-            throw new Error('Backend not responding');
-        }
-        const data = await response.json();
-        if (data.authenticated) {
-            currentUser = data.user_id;
+        if (response.ok) {
+            const data = await response.json();
+            currentUser = data.authenticated ? data.user_id : 'demo_user';
         } else {
-            // Create demo session
-            await fetch(`${API_BASE}/auth/session`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: 'demo_user' })
-            });
             currentUser = 'demo_user';
         }
-        // Always show onboarding first
-        checkOnboarding();
     } catch (error) {
         console.error('Auth error:', error);
-        // Show error message but still show onboarding
         currentUser = 'demo_user';
-        checkOnboarding();
     }
 }
 
-async function checkOnboarding() {
-    // Always show onboarding first - don't auto-skip
-    // User must complete onboarding to see results
-    console.log('Showing onboarding screen');
-    // Onboarding is already visible by default (class="screen active")
+function checkSavedLocation() {
+    const saved = localStorage.getItem('weekend_planner_location');
+    if (saved) {
+        try {
+            onboardingData.home_location = JSON.parse(saved);
+            console.log('Loaded saved location:', onboardingData.home_location);
+        } catch (e) {
+            console.error('Error loading saved location:', e);
+        }
+    }
 }
 
 function setupEventListeners() {
-    // Onboarding form
-    const form = document.getElementById('onboarding-form');
-    form.addEventListener('submit', handleOnboarding);
+    // Step 1: Group type selection
+    document.querySelectorAll('#step-1 .selection-card').forEach(card => {
+        card.addEventListener('click', () => {
+            document.querySelectorAll('#step-1 .selection-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            onboardingData.group_type = card.dataset.value;
+            
+            // Auto-advance after selection
+            setTimeout(() => goToStep(2), 300);
+        });
+    });
     
-    // Refresh button
-    document.getElementById('refresh-btn').addEventListener('click', loadDigest);
+    // Step 2a: Location buttons
+    document.getElementById('use-location-btn').addEventListener('click', requestCurrentLocation);
+    document.getElementById('manual-location-btn').addEventListener('click', () => showSubstep('2b'));
     
-    // Settings button
-    document.getElementById('settings-btn').addEventListener('click', () => {
+    // Step 2b: Location type selection
+    document.getElementById('select-zip').addEventListener('click', () => {
+        document.getElementById('select-zip').classList.add('selected');
+        document.getElementById('select-address').classList.remove('selected');
+        document.getElementById('zip-input-group').classList.remove('hidden');
+        document.getElementById('address-input-group').classList.add('hidden');
+    });
+    
+    document.getElementById('select-address').addEventListener('click', () => {
+        document.getElementById('select-address').classList.add('selected');
+        document.getElementById('select-zip').classList.remove('selected');
+        document.getElementById('address-input-group').classList.remove('hidden');
+        document.getElementById('zip-input-group').classList.add('hidden');
+    });
+    
+    // Step 2d: Multi-select cards for transportation
+    document.querySelectorAll('#step-2d .selection-card.selectable').forEach(card => {
+        card.addEventListener('click', () => {
+            card.classList.toggle('selected');
+            updateTransportationPrefs();
+            updateDepartureTimePrefs();
+            updateTravelTimePrefs();
+        });
+    });
+    
+    // Step 3: Interests multi-select
+    document.querySelectorAll('#interests-grid .selection-card').forEach(card => {
+        card.addEventListener('click', () => {
+            card.classList.toggle('selected');
+            updateInterests();
+        });
+    });
+    
+    // Step 4: Single-select groups (energy, time)
+    document.querySelectorAll('#step-4 .selection-card[data-group]').forEach(card => {
+        card.addEventListener('click', () => {
+            const group = card.dataset.group;
+            document.querySelectorAll(`#step-4 .selection-card[data-group="${group}"]`).forEach(c => {
+                c.classList.remove('selected');
+            });
+            card.classList.add('selected');
+            
+            if (group === 'energy') {
+                onboardingData.energy_level = card.dataset.value;
+            } else if (group === 'time') {
+                onboardingData.time_commitment = card.dataset.value;
+            }
+        });
+    });
+    
+    // Step 5: Budget single-select and checkboxes
+    document.querySelectorAll('#step-5 .selection-card[data-group="budget"]').forEach(card => {
+        card.addEventListener('click', () => {
+            document.querySelectorAll('#step-5 .selection-card[data-group="budget"]').forEach(c => {
+                c.classList.remove('selected');
+            });
+            card.classList.add('selected');
+            onboardingData.budget = card.dataset.value;
+        });
+    });
+    
+    // Planner screen listeners
+    document.getElementById('refresh-btn')?.addEventListener('click', loadDigest);
+    document.getElementById('settings-btn')?.addEventListener('click', () => {
         alert('Settings coming soon!');
     });
     
     // Modal close
     const modal = document.getElementById('detail-modal');
     const closeBtn = document.querySelector('.close');
-    closeBtn.addEventListener('click', () => {
-        modal.classList.remove('active');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => modal.classList.remove('active'));
+    }
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.remove('active');
+        });
+    }
+}
+
+// Navigation
+function goToStep(step) {
+    // Validation
+    if (step === 2 && !onboardingData.group_type) {
+        alert('Please select who you\'re planning for.');
+        return;
+    }
+    
+    if (step === 3 && !onboardingData.home_location) {
+        alert('Please set your location first.');
+        return;
+    }
+    
+    // Update progress bar
+    document.querySelectorAll('.progress-step').forEach((el, index) => {
+        el.classList.remove('active', 'completed');
+        if (index + 1 < step) el.classList.add('completed');
+        if (index + 1 === step) el.classList.add('active');
     });
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            modal.classList.remove('active');
+    
+    // Show step
+    document.querySelectorAll('.onboarding-step').forEach(el => el.classList.remove('active'));
+    document.getElementById(`step-${step}`).classList.add('active');
+    
+    // Reset substeps for step 2
+    if (step === 2) {
+        if (onboardingData.home_location) {
+            showSubstep('2d'); // Skip to travel prefs if location already set
+        } else {
+            showSubstep('2a');
+        }
+    }
+    
+    currentStep = step;
+}
+
+function showSubstep(substep) {
+    document.querySelectorAll('#step-2 .substep').forEach(el => el.classList.remove('active'));
+    document.getElementById(`step-${substep}`).classList.add('active');
+}
+
+// Location handling
+async function requestCurrentLocation() {
+    const btn = document.getElementById('use-location-btn');
+    btn.innerHTML = '<span class="btn-icon">⏳</span><span class="btn-text">Getting location...</span>';
+    btn.disabled = true;
+    
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser.');
+        btn.innerHTML = '<span class="btn-icon">📍</span><span class="btn-text">Use My Current Location</span><span class="btn-subtext">For accurate travel times</span>';
+        btn.disabled = false;
+        showSubstep('2b');
+        return;
+    }
+    
+    try {
+        const position = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 10000
+            });
+        });
+        
+        const { latitude, longitude } = position.coords;
+        
+        // Reverse geocode (simplified - in production use Google Maps API)
+        onboardingData.home_location = {
+            type: 'geolocation',
+            input: 'Current location',
+            lat: latitude,
+            lng: longitude,
+            formatted_address: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+            precision: 'exact'
+        };
+        
+        document.getElementById('location-display').textContent = 
+            `📍 ${onboardingData.home_location.formatted_address}`;
+        
+        showSubstep('2c');
+        
+    } catch (error) {
+        console.error('Geolocation error:', error);
+        btn.innerHTML = '<span class="btn-icon">📍</span><span class="btn-text">Use My Current Location</span><span class="btn-subtext">For accurate travel times</span>';
+        btn.disabled = false;
+        
+        if (error.code === 1) {
+            // Permission denied
+            showSubstep('2b');
+        } else {
+            alert('Could not get your location. Please enter it manually.');
+            showSubstep('2b');
+        }
+    }
+}
+
+function submitLocation(type) {
+    let input, address;
+    
+    if (type === 'zip') {
+        input = document.getElementById('zip-input').value.trim();
+        if (!/^\d{5}(-\d{4})?$/.test(input)) {
+            alert('Please enter a valid ZIP code (e.g., 94102)');
+            return;
+        }
+        address = input;
+    } else {
+        input = document.getElementById('address-input').value.trim();
+        if (input.length < 5) {
+            alert('Please enter a valid address');
+            return;
+        }
+        address = input;
+    }
+    
+    // In production, geocode the address using Google Maps API
+    onboardingData.home_location = {
+        type: type,
+        input: input,
+        lat: 37.7749, // Default SF coords - would be geocoded in production
+        lng: -122.4194,
+        formatted_address: address,
+        precision: type === 'zip' ? 'approximate' : 'exact'
+    };
+    
+    document.getElementById('location-display').textContent = `📍 ${address}`;
+    showSubstep('2c');
+}
+
+function completeLocationStep() {
+    const saveCheckbox = document.getElementById('save-location-checkbox');
+    
+    if (saveCheckbox.checked) {
+        localStorage.setItem('weekend_planner_location', JSON.stringify({
+            ...onboardingData.home_location,
+            savedAt: new Date().toISOString()
+        }));
+    }
+    
+    showSubstep('2d');
+}
+
+// Update preferences from multi-select cards
+function updateTransportationPrefs() {
+    const selected = document.querySelectorAll('#step-2d .selection-card.selectable.selected[data-value="walking"], #step-2d .selection-card.selectable.selected[data-value="transit"], #step-2d .selection-card.selectable.selected[data-value="car"]');
+    onboardingData.transportation = Array.from(selected)
+        .filter(card => ['walking', 'transit', 'car'].includes(card.dataset.value))
+        .map(card => card.dataset.value);
+}
+
+function updateDepartureTimePrefs() {
+    onboardingData.departure_times = { saturday: [], sunday: [] };
+    
+    document.querySelectorAll('#step-2d .selection-card.selectable.selected[data-day]').forEach(card => {
+        const day = card.dataset.day;
+        const value = card.dataset.value;
+        if (!onboardingData.departure_times[day].includes(value)) {
+            onboardingData.departure_times[day].push(value);
         }
     });
 }
 
-async function handleOnboarding(e) {
-    e.preventDefault();
+function updateTravelTimePrefs() {
+    const selected = document.querySelectorAll('#step-2d .selection-card.selectable.selected[data-value="0-15"], #step-2d .selection-card.selectable.selected[data-value="15-30"], #step-2d .selection-card.selectable.selected[data-value="30-60"], #step-2d .selection-card.selectable.selected[data-value="60+"]');
+    onboardingData.travel_time_ranges = Array.from(selected)
+        .filter(card => ['0-15', '15-30', '30-60', '60+'].includes(card.dataset.value))
+        .map(card => card.dataset.value);
+}
+
+function updateInterests() {
+    const selected = document.querySelectorAll('#interests-grid .selection-card.selected');
+    onboardingData.interests = Array.from(selected).map(card => card.dataset.value);
     
-    const selectedCategories = Array.from(document.querySelectorAll('input[name="categories"]:checked'))
+    const count = onboardingData.interests.length;
+    const countEl = document.getElementById('interests-count');
+    const continueBtn = document.getElementById('step3-continue');
+    
+    countEl.textContent = `${count} selected (minimum 3)`;
+    countEl.style.color = count >= 3 ? '#10b981' : '#666';
+    
+    continueBtn.disabled = count < 3;
+}
+
+// Complete onboarding
+async function completeOnboarding() {
+    // Gather all checkbox data
+    onboardingData.accessibility = Array.from(document.querySelectorAll('input[name="accessibility"]:checked'))
+        .map(cb => cb.value);
+    onboardingData.avoid = Array.from(document.querySelectorAll('input[name="avoid"]:checked'))
         .map(cb => cb.value);
     
-    // Ensure at least one category is selected
-    if (selectedCategories.length === 0) {
-        alert('Please select at least one category.');
-        return;
-    }
-    
-    const formData = {
-        home_location: {
-            type: 'city',
-            value: document.getElementById('home-location').value
-        },
-        radius_miles: parseInt(document.getElementById('radius').value),
-        categories: selectedCategories,
-        kid_friendly: document.getElementById('kid-friendly').checked,
-        budget: { min: 0, max: 50 },
-        time_windows: ['SAT_AM', 'SAT_PM', 'SUN_AM', 'SUN_PM'],
-        notification_time_local: document.getElementById('notification-time').value,
-        dedup_window_days: 365,
-        calendar_dedup_opt_in: false
+    // Map interests to backend categories
+    const categoryMapping = {
+        'nature': ['parks'],
+        'arts_culture': ['museums'],
+        'food_drinks': ['food'],
+        'adventure': ['attractions'],
+        'learning': ['museums'],
+        'entertainment': ['attractions'],
+        'relaxation': ['parks'],
+        'shopping': ['attractions'],
+        'events': ['events']
     };
     
-    console.log('Saving preferences:', formData);
+    const categories = [...new Set(
+        onboardingData.interests.flatMap(interest => categoryMapping[interest] || [])
+    )];
+    
+    // Build preferences for API
+    const preferences = {
+        home_location: onboardingData.home_location,
+        radius_miles: getRadiusFromTravelTime(),
+        categories: categories.length > 0 ? categories : ['parks', 'museums', 'attractions'],
+        kid_friendly: onboardingData.group_type === 'family',
+        budget: { min: 0, max: getBudgetMax() },
+        time_windows: getTimeWindows(),
+        notification_time_local: '16:00',
+        dedup_window_days: 365,
+        calendar_dedup_opt_in: false,
+        // Extended preferences
+        group_type: onboardingData.group_type,
+        transportation: onboardingData.transportation,
+        travel_time_ranges: onboardingData.travel_time_ranges,
+        energy_level: onboardingData.energy_level,
+        time_commitment: onboardingData.time_commitment,
+        accessibility: onboardingData.accessibility,
+        avoid: onboardingData.avoid
+    };
+    
+    console.log('Saving preferences:', preferences);
     
     try {
         const response = await fetch(`${API_BASE}/preferences`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(formData)
+            body: JSON.stringify(preferences)
         });
         
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to save preferences: ${response.status} - ${errorText}`);
+            throw new Error('Failed to save preferences');
         }
         
-        const result = await response.json();
-        console.log('Preferences saved:', result);
-        
-        // Show loading state on submit button
-        const submitButton = document.querySelector('#onboarding-form button[type="submit"]');
-        if (submitButton) {
-            const originalText = submitButton.textContent;
-            submitButton.textContent = 'Loading recommendations...';
-            submitButton.disabled = true;
-        }
-        
-        // Switch to planner screen
         showPlanner();
+        loadDigest();
         
-        // Load digest
-        loadDigest().then(() => {
-            // Reset button state (in case needed)
-            if (submitButton) {
-                submitButton.textContent = 'Get Started';
-                submitButton.disabled = false;
-            }
-        });
     } catch (error) {
-        console.error('Onboarding error:', error);
-        alert(`Error saving preferences: ${error.message}\n\nMake sure the backend server is running on port 5001.`);
+        console.error('Error saving preferences:', error);
+        alert('Error saving preferences. Please try again.');
     }
+}
+
+function skipAndComplete() {
+    // Use defaults and complete
+    onboardingData.interests = ['nature', 'arts_culture', 'entertainment'];
+    completeOnboarding();
+}
+
+// Helper functions
+function getRadiusFromTravelTime() {
+    if (onboardingData.travel_time_ranges.includes('60+')) return 50;
+    if (onboardingData.travel_time_ranges.includes('30-60')) return 30;
+    if (onboardingData.travel_time_ranges.includes('15-30')) return 15;
+    return 10;
+}
+
+function getBudgetMax() {
+    const budgetMap = { 'free': 0, 'low': 25, 'moderate': 50, 'any': 1000 };
+    return budgetMap[onboardingData.budget] || 50;
+}
+
+function getTimeWindows() {
+    const windows = [];
+    const dayMap = { saturday: 'SAT', sunday: 'SUN' };
+    const timeMap = { morning: 'AM', midday: 'PM', afternoon: 'PM' };
+    
+    Object.entries(onboardingData.departure_times).forEach(([day, times]) => {
+        times.forEach(time => {
+            windows.push(`${dayMap[day]}_${timeMap[time]}`);
+        });
+    });
+    
+    return [...new Set(windows)];
 }
 
 function showPlanner() {
-    // Hide onboarding
-    const onboarding = document.getElementById('onboarding');
-    const planner = document.getElementById('planner');
-    
-    if (onboarding) {
-        onboarding.classList.remove('active');
-    }
-    if (planner) {
-        planner.classList.add('active');
-    }
-    
-    console.log('Switched to planner screen');
+    document.getElementById('onboarding').classList.remove('active');
+    document.getElementById('planner').classList.add('active');
 }
 
+// Load digest
 async function loadDigest() {
     const loading = document.getElementById('loading');
     const itemsContainer = document.getElementById('digest-items');
@@ -163,12 +450,10 @@ async function loadDigest() {
     itemsContainer.innerHTML = '';
     
     try {
-        console.log('Loading digest from:', `${API_BASE}/digest`);
         const response = await fetch(`${API_BASE}/digest`);
         
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Backend error: ${response.status} - ${errorText}`);
+            throw new Error(`Backend error: ${response.status}`);
         }
         
         const data = await response.json();
@@ -176,22 +461,13 @@ async function loadDigest() {
         currentDigest = data;
         
         if (data.items && data.items.length > 0) {
-            console.log(`Rendering ${data.items.length} recommendations`);
             renderDigestItems(data.items);
         } else {
-            console.warn('No items in digest response');
             itemsContainer.innerHTML = `
                 <div style="text-align: center; padding: 2rem; color: #666;">
                     <p><strong>No recommendations available</strong></p>
-                    <p style="font-size: 0.9rem; margin-top: 0.5rem;">This might be because:</p>
-                    <ul style="text-align: left; display: inline-block; margin-top: 0.5rem;">
-                        <li>All places are filtered out by your preferences</li>
-                        <li>Selected categories don't match available places</li>
-                        <li>All places are marked as "already been"</li>
-                    </ul>
-                    <p style="font-size: 0.85rem; margin-top: 1rem;">Try adjusting your preferences or click "Skip & Use Defaults" to see all recommendations.</p>
-                    <button class="btn btn-secondary" onclick="skipOnboarding()" style="margin-top: 1rem;">Use Defaults</button>
-                    <button class="btn btn-primary" onclick="loadDigest()" style="margin-top: 1rem; margin-left: 0.5rem;">Retry</button>
+                    <p style="font-size: 0.9rem; margin-top: 0.5rem;">Try adjusting your preferences.</p>
+                    <button class="btn btn-primary" onclick="loadDigest()" style="margin-top: 1rem; width: auto;">Retry</button>
                 </div>
             `;
         }
@@ -202,7 +478,7 @@ async function loadDigest() {
                 <p><strong>Error loading recommendations</strong></p>
                 <p style="font-size: 0.9rem; margin-top: 0.5rem;">${error.message}</p>
                 <p style="font-size: 0.85rem; margin-top: 1rem; color: #666;">Make sure the backend server is running on port 5001</p>
-                <button class="btn btn-primary" onclick="loadDigest()" style="margin-top: 1rem;">Retry</button>
+                <button class="btn btn-primary" onclick="loadDigest()" style="margin-top: 1rem; width: auto;">Retry</button>
             </div>
         `;
     } finally {
@@ -210,34 +486,11 @@ async function loadDigest() {
     }
 }
 
-function showBackendError() {
-    // Show a banner if backend is not available
-    const planner = document.getElementById('planner');
-    if (planner && planner.classList.contains('active')) {
-        const container = planner.querySelector('.container');
-        if (container && !container.querySelector('.backend-error')) {
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'backend-error';
-            errorDiv.style.cssText = 'background: #fee; border: 2px solid #fcc; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; color: #c33;';
-            errorDiv.innerHTML = '<strong>⚠️ Backend Connection Issue:</strong> Make sure the backend server is running on <code>http://localhost:5001</code>';
-            container.insertBefore(errorDiv, container.firstChild);
-        }
-    }
-}
-
 function renderDigestItems(items) {
     const container = document.getElementById('digest-items');
     container.innerHTML = '';
     
-    if (!items || items.length === 0) {
-        console.warn('No items to render');
-        container.innerHTML = '<p style="text-align: center; padding: 2rem; color: #666;">No recommendations available.</p>';
-        return;
-    }
-    
-    console.log(`Rendering ${items.length} items`);
-    items.forEach((item, index) => {
-        console.log(`Rendering item ${index + 1}:`, item.title);
+    items.forEach(item => {
         const card = createRecommendationCard(item);
         container.appendChild(card);
     });
@@ -246,6 +499,12 @@ function renderDigestItems(items) {
 function createRecommendationCard(item) {
     const card = document.createElement('div');
     card.className = 'recommendation-card';
+    
+    // Simulate traffic status
+    const trafficClass = item.travel_time_min < 15 ? 'traffic-light' : 
+                         item.travel_time_min < 30 ? 'traffic-moderate' : 'traffic-heavy';
+    const trafficLabel = item.travel_time_min < 15 ? '🟢 Light' : 
+                         item.travel_time_min < 30 ? '🟡 Moderate' : '🔴 Heavy';
     
     card.innerHTML = `
         <div class="card-header">
@@ -256,14 +515,14 @@ function createRecommendationCard(item) {
         </div>
         <div class="card-info">
             <span class="info-badge">📍 ${item.distance_miles} mi</span>
-            <span class="info-badge">⏱️ ${item.travel_time_min} min</span>
+            <span class="info-badge ${trafficClass}">⏱️ ${item.travel_time_min} min (${trafficLabel})</span>
             <span class="info-badge">💰 ${item.price_flag}</span>
             ${item.kid_friendly ? '<span class="info-badge">👶 Kid-friendly</span>' : ''}
             <span class="info-badge">${item.indoor_outdoor === 'outdoor' ? '☀️ Outdoor' : '🏠 Indoor'}</span>
         </div>
         <div class="card-explanation">${item.explanation}</div>
         <div class="card-actions">
-            <button class="btn btn-primary" onclick="showDetail('${item.rec_id}')">View Details</button>
+            <button class="btn btn-primary" onclick="showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
             <button class="btn btn-secondary" onclick="handleFeedback('${item.rec_id}', 'like')">👍</button>
             <button class="btn btn-secondary" onclick="handleFeedback('${item.rec_id}', 'save')">⭐</button>
         </div>
@@ -320,21 +579,12 @@ async function showDetail(recId) {
     
     modal.classList.add('active');
     window.selectedSlot = null;
-    window.selectedRecId = recId;
 }
 
 function selectSlot(slot, recId) {
-    // Remove previous selection
-    document.querySelectorAll('.slot-btn').forEach(btn => {
-        btn.classList.remove('selected');
-    });
-    
-    // Mark selected
+    document.querySelectorAll('.slot-btn').forEach(btn => btn.classList.remove('selected'));
     event.target.classList.add('selected');
     window.selectedSlot = slot;
-    window.selectedRecId = recId;
-    
-    // Enable add to calendar button
     document.getElementById('add-to-calendar-btn').disabled = false;
 }
 
@@ -357,7 +607,6 @@ async function addToCalendar(recId) {
         
         const event = await response.json();
         
-        // Create Google Calendar link
         const start = new Date(event.start.dateTime).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
         const end = new Date(event.end.dateTime).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
         const details = encodeURIComponent(event.description);
@@ -366,10 +615,8 @@ async function addToCalendar(recId) {
         
         const googleCalendarUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&location=${location}`;
         
-        // Open in new window
         window.open(googleCalendarUrl, '_blank');
         
-        // Record feedback
         await handleFeedback(recId, 'add_to_calendar');
         
         alert('Calendar event created! Check your Google Calendar.');
@@ -388,67 +635,35 @@ async function handleFeedback(recId, action) {
             body: JSON.stringify({
                 rec_id: recId,
                 action: action,
-                metadata: {
-                    week: currentDigest?.week || ''
-                }
+                metadata: { week: currentDigest?.week || '' }
             })
         });
         
         if (action === 'like') {
             event.target.textContent = '👍 Liked!';
-            setTimeout(() => {
-                event.target.textContent = '👍';
-            }, 2000);
+            setTimeout(() => { event.target.textContent = '👍'; }, 2000);
         } else if (action === 'save') {
             event.target.textContent = '⭐ Saved!';
-            setTimeout(() => {
-                event.target.textContent = '⭐';
-            }, 2000);
+            setTimeout(() => { event.target.textContent = '⭐'; }, 2000);
         } else if (action === 'already_been') {
             alert('Marked as visited. This place won\'t be recommended again.');
-            loadDigest(); // Refresh to remove from list
+            document.getElementById('detail-modal').classList.remove('active');
+            loadDigest();
         }
     } catch (error) {
         console.error('Error submitting feedback:', error);
     }
 }
 
-function skipOnboarding() {
-    // Use default preferences and proceed to results
-    const defaultPrefs = {
-        home_location: {
-            type: 'city',
-            value: 'San Francisco, CA'
-        },
-        radius_miles: 10,
-        categories: ['parks', 'museums', 'attractions'],
-        kid_friendly: true,
-        budget: { min: 0, max: 50 },
-        time_windows: ['SAT_AM', 'SAT_PM', 'SUN_AM', 'SUN_PM'],
-        notification_time_local: '16:00',
-        dedup_window_days: 365,
-        calendar_dedup_opt_in: false
-    };
-    
-    // Save defaults and show results
-    fetch(`${API_BASE}/preferences`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(defaultPrefs)
-    }).then(() => {
-        showPlanner();
-        loadDigest();
-    }).catch(error => {
-        console.error('Error saving default preferences:', error);
-        // Still show planner even if save fails
-        showPlanner();
-        loadDigest();
-    });
-}
-
-// Make functions available globally
+// Make functions globally available
+window.goToStep = goToStep;
+window.showSubstep = showSubstep;
+window.submitLocation = submitLocation;
+window.completeLocationStep = completeLocationStep;
+window.completeOnboarding = completeOnboarding;
+window.skipAndComplete = skipAndComplete;
 window.showDetail = showDetail;
 window.selectSlot = selectSlot;
 window.addToCalendar = addToCalendar;
 window.handleFeedback = handleFeedback;
-window.skipOnboarding = skipOnboarding;
+window.loadDigest = loadDigest;

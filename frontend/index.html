@@ -10,60 +10,342 @@
     <div id="app">
         <!-- Onboarding Screen -->
         <div id="onboarding" class="screen active">
-            <div class="container">
-                <h1>🎉 Weekend Planner</h1>
-                <p class="subtitle">Get personalized weekend ideas every Friday</p>
-                
-                <form id="onboarding-form">
-                    <div class="form-group">
-                        <label>Planning Mode</label>
-                        <select id="planning-mode" required>
-                            <option value="family">Family</option>
-                            <option value="individual">Individual</option>
-                        </select>
-                    </div>
+            <div class="container onboarding-container">
+                <!-- Progress Indicator -->
+                <div class="progress-bar">
+                    <div class="progress-step active" data-step="1">1</div>
+                    <div class="progress-line"></div>
+                    <div class="progress-step" data-step="2">2</div>
+                    <div class="progress-line"></div>
+                    <div class="progress-step" data-step="3">3</div>
+                    <div class="progress-line"></div>
+                    <div class="progress-step" data-step="4">4</div>
+                    <div class="progress-line"></div>
+                    <div class="progress-step" data-step="5">5</div>
+                </div>
+
+                <!-- Step 1: Group Type -->
+                <div id="step-1" class="onboarding-step active">
+                    <h1>🎉 Weekend Planner</h1>
+                    <p class="subtitle">Who are you planning weekends for?</p>
                     
-                    <div class="form-group">
-                        <label>Home Location</label>
-                        <input type="text" id="home-location" placeholder="San Francisco, CA" value="San Francisco, CA" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Search Radius (miles)</label>
-                        <input type="number" id="radius" value="10" min="1" max="50" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Categories (select at least one)</label>
-                        <div class="checkbox-group">
-                            <label><input type="checkbox" name="categories" value="parks" checked> Parks</label>
-                            <label><input type="checkbox" name="categories" value="museums" checked> Museums</label>
-                            <label><input type="checkbox" name="categories" value="attractions" checked> Attractions</label>
-                            <label><input type="checkbox" name="categories" value="food"> Food</label>
-                            <label><input type="checkbox" name="categories" value="events"> Events</label>
+                    <div class="selection-grid">
+                        <div class="selection-card" data-value="solo">
+                            <div class="card-emoji">👤</div>
+                            <div class="card-label">Just Me</div>
                         </div>
-                        <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-                            <strong>Note:</strong> Currently, only Parks, Museums, and Attractions have recommendations available.
-                        </p>
+                        <div class="selection-card" data-value="couple">
+                            <div class="card-emoji">👫</div>
+                            <div class="card-label">With Partner</div>
+                        </div>
+                        <div class="selection-card" data-value="family">
+                            <div class="card-emoji">👨‍👩‍👧‍👦</div>
+                            <div class="card-label">Family with Kids</div>
+                        </div>
+                        <div class="selection-card" data-value="friends">
+                            <div class="card-emoji">👥</div>
+                            <div class="card-label">With Friends</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Location -->
+                <div id="step-2" class="onboarding-step">
+                    <!-- Step 2a: Location prompt -->
+                    <div id="step-2a" class="substep active">
+                        <h2>Where are you based?</h2>
+                        <p class="subtitle">We'll use this to calculate travel times</p>
+                        
+                        <button id="use-location-btn" class="btn btn-location">
+                            <span class="btn-icon">📍</span>
+                            <span class="btn-text">Use My Current Location</span>
+                            <span class="btn-subtext">For accurate travel times</span>
+                        </button>
+                        
+                        <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
                     </div>
                     
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="kid-friendly" checked>
-                            Kid-friendly activities
-                        </label>
+                    <!-- Step 2b: Manual entry -->
+                    <div id="step-2b" class="substep">
+                        <h2>How would you like to enter your location?</h2>
+                        
+                        <div class="selection-grid two-col">
+                            <div class="selection-card" data-value="zip" id="select-zip">
+                                <div class="card-emoji">🏠</div>
+                                <div class="card-label">ZIP Code</div>
+                                <div class="card-sublabel">(faster entry)</div>
+                            </div>
+                            <div class="selection-card" data-value="address" id="select-address">
+                                <div class="card-emoji">📍</div>
+                                <div class="card-label">Full Address</div>
+                                <div class="card-sublabel">(exact times) ✓</div>
+                            </div>
+                        </div>
+                        
+                        <!-- ZIP input -->
+                        <div id="zip-input-group" class="input-group hidden">
+                            <label>Enter your ZIP code:</label>
+                            <input type="text" id="zip-input" placeholder="94102" maxlength="10">
+                            <p class="privacy-note">🔒 We only use this for travel times</p>
+                            <button class="btn btn-primary" onclick="submitLocation('zip')">Continue →</button>
+                        </div>
+                        
+                        <!-- Address input -->
+                        <div id="address-input-group" class="input-group hidden">
+                            <label>Enter your address:</label>
+                            <input type="text" id="address-input" placeholder="123 Main St, San Francisco, CA">
+                            <p class="privacy-note">🔒 We only use this for travel times</p>
+                            <button class="btn btn-primary" onclick="submitLocation('address')">Continue →</button>
+                        </div>
+                        
+                        <button class="btn-link" onclick="showSubstep('2a')">← Back</button>
                     </div>
                     
-                    <div class="form-group">
-                        <label>Friday notification time</label>
-                        <input type="time" id="notification-time" value="16:00" required>
+                    <!-- Step 2c: Save prompt -->
+                    <div id="step-2c" class="substep">
+                        <h2>✓ Location set!</h2>
+                        <p class="location-display" id="location-display">📍 San Francisco, CA 94102</p>
+                        
+                        <div class="checkbox-single">
+                            <label>
+                                <input type="checkbox" id="save-location-checkbox">
+                                <span>Save as my home location</span>
+                                <span class="checkbox-sublabel">(skip this step next time)</span>
+                            </label>
+                        </div>
+                        
+                        <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
                     </div>
                     
-                    <button type="submit" class="btn btn-primary">Get Started</button>
-                    <div style="text-align: center; margin-top: 1rem;">
-                        <button type="button" onclick="skipOnboarding()" class="btn btn-secondary" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Or use defaults</button>
+                    <!-- Step 2d: Travel preferences -->
+                    <div id="step-2d" class="substep">
+                        <h2>Travel Preferences</h2>
+                        
+                        <div class="form-section">
+                            <label>How do you get around? (select all)</label>
+                            <div class="selection-grid three-col">
+                                <div class="selection-card small selectable" data-value="walking">
+                                    <div class="card-emoji">🚶</div>
+                                    <div class="card-label">Walking/Biking</div>
+                                </div>
+                                <div class="selection-card small selectable selected" data-value="transit">
+                                    <div class="card-emoji">🚇</div>
+                                    <div class="card-label">Transit</div>
+                                </div>
+                                <div class="selection-card small selectable selected" data-value="car">
+                                    <div class="card-emoji">🚗</div>
+                                    <div class="card-label">Car</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section">
+                            <label>Typical departure times (select all)</label>
+                            <p class="section-sublabel">Saturday:</p>
+                            <div class="selection-grid three-col">
+                                <div class="selection-card small selectable selected" data-day="saturday" data-value="morning">
+                                    <div class="card-label">Morning</div>
+                                    <div class="card-sublabel">8-10 AM</div>
+                                </div>
+                                <div class="selection-card small selectable" data-day="saturday" data-value="midday">
+                                    <div class="card-label">Midday</div>
+                                    <div class="card-sublabel">11-1 PM</div>
+                                </div>
+                                <div class="selection-card small selectable" data-day="saturday" data-value="afternoon">
+                                    <div class="card-label">Afternoon</div>
+                                    <div class="card-sublabel">2-5 PM</div>
+                                </div>
+                            </div>
+                            <p class="section-sublabel">Sunday:</p>
+                            <div class="selection-grid three-col">
+                                <div class="selection-card small selectable selected" data-day="sunday" data-value="morning">
+                                    <div class="card-label">Morning</div>
+                                    <div class="card-sublabel">8-10 AM</div>
+                                </div>
+                                <div class="selection-card small selectable" data-day="sunday" data-value="midday">
+                                    <div class="card-label">Midday</div>
+                                    <div class="card-sublabel">11-1 PM</div>
+                                </div>
+                                <div class="selection-card small selectable" data-day="sunday" data-value="afternoon">
+                                    <div class="card-label">Afternoon</div>
+                                    <div class="card-sublabel">2-5 PM</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section">
+                            <label>Max travel time (select all that apply)</label>
+                            <div class="selection-grid four-col">
+                                <div class="selection-card small selectable selected" data-value="0-15">
+                                    <div class="card-label">&lt; 15 min</div>
+                                    <div class="card-sublabel">nearby</div>
+                                </div>
+                                <div class="selection-card small selectable selected" data-value="15-30">
+                                    <div class="card-label">15-30 min</div>
+                                    <div class="card-sublabel">moderate</div>
+                                </div>
+                                <div class="selection-card small selectable" data-value="30-60">
+                                    <div class="card-label">30-60 min</div>
+                                    <div class="card-sublabel">worth it</div>
+                                </div>
+                                <div class="selection-card small selectable" data-value="60+">
+                                    <div class="card-label">60+ min</div>
+                                    <div class="card-sublabel">day trip</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
                     </div>
-                </form>
+                </div>
+
+                <!-- Step 3: Interests -->
+                <div id="step-3" class="onboarding-step">
+                    <h2>What do you enjoy?</h2>
+                    <p class="subtitle">Pick at least 3</p>
+                    
+                    <div class="selection-grid three-col" id="interests-grid">
+                        <div class="selection-card selectable" data-value="nature">
+                            <div class="card-emoji">🌲🏕️</div>
+                            <div class="card-label">Nature & Parks</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="arts_culture">
+                            <div class="card-emoji">🎨🖼️</div>
+                            <div class="card-label">Arts & Culture</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="food_drinks">
+                            <div class="card-emoji">🍽️🍷</div>
+                            <div class="card-label">Food & Drinks</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="adventure">
+                            <div class="card-emoji">🎢🎯</div>
+                            <div class="card-label">Adventure & Sports</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="learning">
+                            <div class="card-emoji">📚🔬</div>
+                            <div class="card-label">Learning & Science</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="entertainment">
+                            <div class="card-emoji">🎵🎭</div>
+                            <div class="card-label">Entertainment</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="relaxation">
+                            <div class="card-emoji">🧘☕</div>
+                            <div class="card-label">Relaxation</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="shopping">
+                            <div class="card-emoji">🛍️🏪</div>
+                            <div class="card-label">Shopping & Markets</div>
+                        </div>
+                        <div class="selection-card selectable" data-value="events">
+                            <div class="card-emoji">🎪🎠</div>
+                            <div class="card-label">Local Events</div>
+                        </div>
+                    </div>
+                    
+                    <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
+                    
+                    <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
+                    <button class="btn-link" onclick="goToStep(2)">← Back</button>
+                </div>
+
+                <!-- Step 4: Activity Style -->
+                <div id="step-4" class="onboarding-step">
+                    <h2>What's your ideal weekend vibe?</h2>
+                    
+                    <div class="form-section">
+                        <label>Energy Level:</label>
+                        <div class="selection-grid three-col">
+                            <div class="selection-card selectable" data-group="energy" data-value="relaxing">
+                                <div class="card-emoji">🧘</div>
+                                <div class="card-label">Relaxing</div>
+                                <div class="card-sublabel">sit, view, chill</div>
+                            </div>
+                            <div class="selection-card selectable selected" data-group="energy" data-value="moderate">
+                                <div class="card-emoji">🚶</div>
+                                <div class="card-label">Moderate</div>
+                                <div class="card-sublabel">walking, exploring</div>
+                            </div>
+                            <div class="selection-card selectable" data-group="energy" data-value="active">
+                                <div class="card-emoji">🏃</div>
+                                <div class="card-label">Active</div>
+                                <div class="card-sublabel">adventure, sports</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <label>How much time per activity?</label>
+                        <div class="selection-grid three-col">
+                            <div class="selection-card selectable" data-group="time" data-value="quick">
+                                <div class="card-label">1-2 hours</div>
+                                <div class="card-sublabel">Quick trip</div>
+                            </div>
+                            <div class="selection-card selectable selected" data-group="time" data-value="half_day">
+                                <div class="card-label">3-4 hours</div>
+                                <div class="card-sublabel">Half-day</div>
+                            </div>
+                            <div class="selection-card selectable" data-group="time" data-value="full_day">
+                                <div class="card-label">5+ hours</div>
+                                <div class="card-sublabel">Full day</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
+                    <button class="btn-link" onclick="goToStep(3)">← Back</button>
+                </div>
+
+                <!-- Step 5: Constraints (Optional) -->
+                <div id="step-5" class="onboarding-step">
+                    <h2>A few more details</h2>
+                    <p class="subtitle">Optional - you can skip this</p>
+                    
+                    <div class="form-section">
+                        <label>Budget per outing:</label>
+                        <div class="selection-grid four-col">
+                            <div class="selection-card small selectable" data-group="budget" data-value="free">
+                                <div class="card-label">Free</div>
+                                <div class="card-sublabel">only</div>
+                            </div>
+                            <div class="selection-card small selectable" data-group="budget" data-value="low">
+                                <div class="card-label">&lt; $25</div>
+                                <div class="card-sublabel">per person</div>
+                            </div>
+                            <div class="selection-card small selectable selected" data-group="budget" data-value="moderate">
+                                <div class="card-label">&lt; $50</div>
+                                <div class="card-sublabel">per person</div>
+                            </div>
+                            <div class="selection-card small selectable" data-group="budget" data-value="any">
+                                <div class="card-label">No limit</div>
+                                <div class="card-sublabel"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <label>Accessibility needs:</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="accessibility" value="wheelchair"> Wheelchair accessible</label>
+                            <label><input type="checkbox" name="accessibility" value="stroller"> Stroller friendly</label>
+                            <label><input type="checkbox" name="accessibility" value="limited_walking"> Limited walking</label>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <label>Prefer to avoid:</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="avoid" value="crowds"> Crowded places</label>
+                            <label><input type="checkbox" name="avoid" value="tourist"> Tourist spots</label>
+                            <label><input type="checkbox" name="avoid" value="reservations"> Requires reservations</label>
+                            <label><input type="checkbox" name="avoid" value="waits"> Long wait times</label>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
+                    <button class="btn-link" onclick="goToStep(4)">← Back</button>
+                    <button class="btn-link" onclick="skipAndComplete()">Skip & use defaults</button>
+                </div>
             </div>
         </div>
         
