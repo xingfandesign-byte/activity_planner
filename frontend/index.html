@@ -495,154 +495,239 @@
                 <header class="dashboard-header">
                     <h1>Weekend Planner</h1>
                     <div class="header-actions">
-                        <button id="settings-btn" class="btn btn-secondary" onclick="showSettings()">Settings</button>
+                        <button id="settings-btn" class="btn btn-secondary" onclick="openSettings()">⚙️ Settings</button>
                         <button id="signout-btn" class="btn btn-secondary" onclick="handleSignOut()">Sign Out</button>
                     </div>
                 </header>
                 
                 <div class="welcome-banner">
                     <h2>Welcome back, <span id="user-name">there</span>! 👋</h2>
-                    <p>Your preferences are ready. Adjust anything below or jump straight to recommendations.</p>
+                    <p>Here's what's happening this weekend.</p>
                 </div>
                 
-                <div class="preferences-summary">
-                    <div class="summary-header">
-                        <h3>Your Saved Preferences</h3>
-                        <button class="btn-link" onclick="editAllPreferences()">Edit All</button>
-                    </div>
+                <!-- Quick Adjustments - Now at the top -->
+                <div class="quick-adjustments">
+                    <h3>🎯 Quick Adjustments for This Weekend</h3>
+                    <p class="quick-adjustments-note">These are temporary - your saved preferences won't change</p>
                     
-                    <!-- Location -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">📍</span>
-                            <span class="pref-title">Location</span>
-                            <button class="btn-edit" onclick="editPreference('location')">Edit</button>
+                    <div class="quick-row">
+                        <div class="form-group">
+                            <label>Location</label>
+                            <select id="quick-location" onchange="onQuickAdjustmentChange()">
+                                <option value="">📍 Use saved location</option>
+                                <option value="current">📍 Use current location</option>
+                                <option value="custom">✏️ Enter new location...</option>
+                            </select>
                         </div>
-                        <div class="pref-card-content">
-                            <p id="pref-location">San Francisco, CA 94102</p>
-                            <p class="pref-sublabel">Saved home location</p>
-                        </div>
-                    </div>
-                    
-                    <!-- Planning For -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">👨‍👩‍👧‍👦</span>
-                            <span class="pref-title">Planning For</span>
-                            <button class="btn-edit" onclick="editPreference('group')">Edit</button>
-                        </div>
-                        <div class="pref-card-content">
-                            <p id="pref-group">Family with Kids</p>
-                        </div>
-                    </div>
-                    
-                    <!-- Travel Preferences -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">🚗</span>
-                            <span class="pref-title">Travel Preferences</span>
-                            <button class="btn-edit" onclick="editPreference('travel')">Edit</button>
-                        </div>
-                        <div class="pref-card-content">
-                            <p><strong>Transportation:</strong> <span id="pref-transport">Car, Transit</span></p>
-                            <p><strong>Max travel time:</strong> <span id="pref-travel-time">15-30 min</span></p>
-                            <p><strong>Departure:</strong> <span id="pref-departure">Saturday morning, Sunday morning</span></p>
-                        </div>
-                    </div>
-                    
-                    <!-- Interests -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">🎯</span>
-                            <span class="pref-title">Interests</span>
-                            <button class="btn-edit" onclick="editPreference('interests')">Edit</button>
-                        </div>
-                        <div class="pref-card-content">
-                            <div class="interest-tags" id="pref-interests">
-                                <span class="tag">🌲 Nature & Parks</span>
-                                <span class="tag">🎨 Arts & Culture</span>
-                                <span class="tag">🍽️ Food & Drinks</span>
+                        
+                        <div class="form-group">
+                            <label>Planning for</label>
+                            <div class="quick-toggle-group">
+                                <button class="quick-toggle" data-value="solo" onclick="selectQuickGroup(this)">👤</button>
+                                <button class="quick-toggle" data-value="couple" onclick="selectQuickGroup(this)">👫</button>
+                                <button class="quick-toggle active" data-value="family" onclick="selectQuickGroup(this)">👨‍👩‍👧‍👦</button>
+                                <button class="quick-toggle" data-value="friends" onclick="selectQuickGroup(this)">👥</button>
                             </div>
                         </div>
                     </div>
                     
-                    <!-- Ideal Vibe -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">🧘</span>
-                            <span class="pref-title">Ideal Vibe</span>
-                            <button class="btn-edit" onclick="editPreference('vibe')">Edit</button>
-                        </div>
-                        <div class="pref-card-content">
-                            <p><strong>Energy:</strong> <span id="pref-energy">Moderate (walking, exploring)</span></p>
-                            <p><strong>Time:</strong> <span id="pref-time-commit">Half-day (3-4 hours)</span></p>
-                            <p><strong>Budget:</strong> <span id="pref-budget">Under $50 per person</span></p>
-                        </div>
-                    </div>
-                    
-                    <!-- Other Preferences -->
-                    <div class="pref-card">
-                        <div class="pref-card-header">
-                            <span class="pref-icon">⚙️</span>
-                            <span class="pref-title">Other Preferences</span>
-                            <button class="btn-edit" onclick="editPreference('other')">Edit</button>
-                        </div>
-                        <div class="pref-card-content" id="pref-other">
-                            <p>✓ Kid-friendly activities</p>
-                            <p>✓ Stroller friendly</p>
-                            <p>Avoiding: Crowds, Long waits</p>
+                    <div class="form-group">
+                        <label>Max travel time</label>
+                        <div class="quick-toggle-group travel-time-toggles">
+                            <button class="quick-toggle active" data-value="0-15" onclick="toggleQuickTravelTime(this)">&lt; 15 min</button>
+                            <button class="quick-toggle active" data-value="15-30" onclick="toggleQuickTravelTime(this)">15-30 min</button>
+                            <button class="quick-toggle" data-value="30-60" onclick="toggleQuickTravelTime(this)">30-60 min</button>
+                            <button class="quick-toggle" data-value="60+" onclick="toggleQuickTravelTime(this)">60+ day trip</button>
                         </div>
                     </div>
                 </div>
                 
-                <!-- Quick Adjustments -->
-                <div class="quick-adjustments">
-                    <h3>Quick Adjustments for This Weekend</h3>
-                    
-                    <div class="form-group">
-                        <label>Different location?</label>
-                        <select id="quick-location">
-                            <option value="">Use saved location</option>
-                            <option value="current">Use current location</option>
-                            <option value="custom">Enter new location...</option>
-                        </select>
+                <!-- Recommendations Section -->
+                <div class="dashboard-recommendations">
+                    <div class="section-header">
+                        <h3>🎉 This Weekend's Recommendations</h3>
+                        <button class="btn-link" onclick="refreshRecommendations()">↻ Refresh</button>
                     </div>
-                    
-                    <div class="form-group">
-                        <label>Planning for someone else?</label>
-                        <div class="quick-toggle-group">
-                            <button class="quick-toggle" data-value="solo">👤 Solo</button>
-                            <button class="quick-toggle" data-value="couple">👫 Couple</button>
-                            <button class="quick-toggle active" data-value="family">👨‍👩‍👧‍👦 Family</button>
-                            <button class="quick-toggle" data-value="friends">👥 Friends</button>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>More time this weekend?</label>
-                        <div class="quick-toggle-group">
-                            <button class="quick-toggle active" data-value="0-15">&lt; 15 min</button>
-                            <button class="quick-toggle active" data-value="15-30">15-30 min</button>
-                            <button class="quick-toggle" data-value="30-60">30-60 min</button>
-                            <button class="quick-toggle" data-value="60+">60+ day trip</button>
-                        </div>
+                    <div id="dashboard-digest-items" class="digest-grid">
+                        <div class="loading" id="dashboard-loading">Loading recommendations...</div>
                     </div>
                 </div>
-                
-                <button class="btn btn-primary btn-large" onclick="showRecommendations()">
-                    🎉 Show This Weekend's Recommendations
-                </button>
             </div>
         </div>
         
-        <!-- Main Planner Screen (Recommendations) -->
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+            <div class="modal-content modal-large">
+                <span class="close" onclick="closeSettings()">&times;</span>
+                <h2>⚙️ Settings</h2>
+                
+                <div class="settings-tabs">
+                    <button class="settings-tab active" onclick="showSettingsTab('preferences')">Saved Preferences</button>
+                    <button class="settings-tab" onclick="showSettingsTab('account')">Account</button>
+                    <button class="settings-tab" onclick="showSettingsTab('notifications')">Notifications</button>
+                </div>
+                
+                <!-- Preferences Tab -->
+                <div id="settings-preferences" class="settings-tab-content active">
+                    <div class="preferences-summary">
+                        <!-- Location -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon">📍</span>
+                                <span class="pref-title">Home Location</span>
+                                <button class="btn-edit" onclick="editPreference('location')">Edit</button>
+                            </div>
+                            <div class="pref-card-content">
+                                <p id="pref-location">San Francisco, CA 94102</p>
+                                <p class="pref-sublabel">Used as default starting point</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Planning For -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon" id="pref-group-icon">👨‍👩‍👧‍👦</span>
+                                <span class="pref-title">Default Planning For</span>
+                                <button class="btn-edit" onclick="editPreference('group')">Edit</button>
+                            </div>
+                            <div class="pref-card-content">
+                                <p id="pref-group">Family with Kids</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Travel Preferences -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon">🚗</span>
+                                <span class="pref-title">Travel Preferences</span>
+                                <button class="btn-edit" onclick="editPreference('travel')">Edit</button>
+                            </div>
+                            <div class="pref-card-content">
+                                <p><strong>Transportation:</strong> <span id="pref-transport">Car, Transit</span></p>
+                                <p><strong>Max travel time:</strong> <span id="pref-travel-time">15-30 min</span></p>
+                                <p><strong>Departure:</strong> <span id="pref-departure">Saturday morning, Sunday morning</span></p>
+                            </div>
+                        </div>
+                        
+                        <!-- Interests -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon">🎯</span>
+                                <span class="pref-title">Interests</span>
+                                <button class="btn-edit" onclick="editPreference('interests')">Edit</button>
+                            </div>
+                            <div class="pref-card-content">
+                                <div class="interest-tags" id="pref-interests">
+                                    <span class="tag">🌲 Nature & Parks</span>
+                                    <span class="tag">🎨 Arts & Culture</span>
+                                    <span class="tag">🍽️ Food & Drinks</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Ideal Vibe -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon">🧘</span>
+                                <span class="pref-title">Ideal Vibe</span>
+                                <button class="btn-edit" onclick="editPreference('vibe')">Edit</button>
+                            </div>
+                            <div class="pref-card-content">
+                                <p><strong>Energy:</strong> <span id="pref-energy">Moderate (walking, exploring)</span></p>
+                                <p><strong>Time:</strong> <span id="pref-time-commit">Half-day (3-4 hours)</span></p>
+                                <p><strong>Budget:</strong> <span id="pref-budget">Under $50 per person</span></p>
+                            </div>
+                        </div>
+                        
+                        <!-- Other Preferences -->
+                        <div class="pref-card">
+                            <div class="pref-card-header">
+                                <span class="pref-icon">⚙️</span>
+                                <span class="pref-title">Other Preferences</span>
+                                <button class="btn-edit" onclick="editPreference('other')">Edit</button>
+                            </div>
+                            <div class="pref-card-content" id="pref-other">
+                                <p>✓ Kid-friendly activities</p>
+                                <p>✓ Stroller friendly</p>
+                                <p>Avoiding: Crowds, Long waits</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-secondary" onclick="editAllPreferences()">Redo Full Onboarding</button>
+                </div>
+                
+                <!-- Account Tab -->
+                <div id="settings-account" class="settings-tab-content">
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">👤</span>
+                            <span class="pref-title">Account Info</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <p><strong>Email:</strong> <span id="account-email">user@example.com</span></p>
+                            <p><strong>Member since:</strong> <span id="account-since">January 2026</span></p>
+                        </div>
+                    </div>
+                    
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🔒</span>
+                            <span class="pref-title">Security</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <button class="btn btn-secondary" onclick="changePassword()">Change Password</button>
+                        </div>
+                    </div>
+                    
+                    <div class="pref-card danger">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">⚠️</span>
+                            <span class="pref-title">Danger Zone</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <button class="btn btn-danger" onclick="deleteAccount()">Delete Account</button>
+                            <p class="pref-sublabel">This action cannot be undone</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Notifications Tab -->
+                <div id="settings-notifications" class="settings-tab-content">
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">📧</span>
+                            <span class="pref-title">Email Notifications</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="notif-weekly" checked>
+                                <span>Weekly weekend digest</span>
+                            </label>
+                            <label class="toggle-label">
+                                <input type="checkbox" id="notif-events">
+                                <span>Special events near me</span>
+                            </label>
+                            <label class="toggle-label">
+                                <input type="checkbox" id="notif-deals">
+                                <span>Deals and promotions</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button class="btn btn-primary" onclick="saveNotificationSettings()">Save Preferences</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Full Screen Planner (optional expanded view) -->
         <div id="planner" class="screen">
             <div class="container">
                 <header>
                     <h1>Weekend Planner</h1>
                     <div class="header-actions">
-                        <button id="back-to-dashboard" class="btn btn-secondary" onclick="showDashboard()">← Back</button>
-                        <button id="refresh-btn" class="btn btn-secondary" onclick="loadDigest()">Refresh</button>
+                        <button id="back-to-dashboard" class="btn btn-secondary" onclick="showDashboard()">← Dashboard</button>
+                        <button id="refresh-btn" class="btn btn-secondary" onclick="loadDigest()">↻ Refresh</button>
                     </div>
                 </header>
                 

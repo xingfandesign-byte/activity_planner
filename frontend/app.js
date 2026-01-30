@@ -231,6 +231,8 @@ function showOnboarding() {
 function showDashboard() {
     showScreen('dashboard');
     populateDashboard();
+    // Auto-load recommendations
+    loadDashboardRecommendations();
 }
 
 function showPlanner() {
@@ -242,6 +244,65 @@ function showRecommendations() {
     // Gather quick adjustments before showing
     gatherQuickAdjustments();
     showPlanner();
+}
+
+function refreshRecommendations() {
+    gatherQuickAdjustments();
+    loadDashboardRecommendations();
+}
+
+async function loadDashboardRecommendations() {
+    const loading = document.getElementById('dashboard-loading');
+    const container = document.getElementById('dashboard-digest-items');
+    
+    if (loading) loading.style.display = 'block';
+    if (container) container.innerHTML = '<div class="loading" id="dashboard-loading">Loading recommendations...</div>';
+    
+    try {
+        const response = await fetch(`${API_BASE}/digest`);
+        
+        if (!response.ok) {
+            throw new Error(`Backend error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        window.currentDigest = data;
+        
+        if (data.items && data.items.length > 0) {
+            renderDashboardItems(data.items);
+        } else {
+            if (container) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: #666;">
+                        <p><strong>No recommendations yet</strong></p>
+                        <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
+                    </div>
+                `;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading recommendations:', error);
+        if (container) {
+            container.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: #ef4444;">
+                    <p><strong>Error loading recommendations</strong></p>
+                    <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">Make sure the backend server is running</p>
+                    <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
+                </div>
+            `;
+        }
+    }
+}
+
+function renderDashboardItems(items) {
+    const container = document.getElementById('dashboard-digest-items');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    items.forEach(item => {
+        const card = createRecommendationCard(item);
+        container.appendChild(card);
+    });
 }
 
 // ==================== AUTH FORMS ====================
@@ -989,11 +1050,80 @@ function savePreferenceEdit() {
 }
 
 function editAllPreferences() {
+    closeSettings();
     showOnboarding();
 }
 
-function showSettings() {
-    alert('Settings coming soon!');
+// ==================== SETTINGS ====================
+
+function openSettings() {
+    populateSettings();
+    document.getElementById('settings-modal').classList.add('active');
+}
+
+function closeSettings() {
+    document.getElementById('settings-modal').classList.remove('active');
+}
+
+function showSettingsTab(tab) {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.settings-tab-content').forEach(c => c.classList.remove('active'));
+    
+    document.querySelector(`.settings-tab[onclick*="${tab}"]`)?.classList.add('active');
+    document.getElementById(`settings-${tab}`)?.classList.add('active');
+}
+
+function populateSettings() {
+    // Populate account info
+    const email = currentUser?.email || 'user@example.com';
+    document.getElementById('account-email').textContent = email;
+    document.getElementById('account-since').textContent = 'January 2026';
+    
+    // Preferences are already populated by populateDashboard
+}
+
+function changePassword() {
+    alert('Password change feature coming soon!');
+}
+
+function deleteAccount() {
+    if (confirm('Are you sure you want to delete your account? This cannot be undone.')) {
+        localStorage.clear();
+        sessionStorage.clear();
+        showAuthScreen();
+    }
+}
+
+function saveNotificationSettings() {
+    const settings = {
+        weekly: document.getElementById('notif-weekly')?.checked,
+        events: document.getElementById('notif-events')?.checked,
+        deals: document.getElementById('notif-deals')?.checked
+    };
+    localStorage.setItem('notification_settings', JSON.stringify(settings));
+    alert('Notification preferences saved!');
+}
+
+// ==================== QUICK ADJUSTMENTS ====================
+
+function selectQuickGroup(btn) {
+    btn.parentElement.querySelectorAll('.quick-toggle').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    onQuickAdjustmentChange();
+}
+
+function toggleQuickTravelTime(btn) {
+    btn.classList.toggle('active');
+    onQuickAdjustmentChange();
+}
+
+function onQuickAdjustmentChange() {
+    // Auto-refresh recommendations when adjustments change
+    clearTimeout(window.quickAdjustmentTimeout);
+    window.quickAdjustmentTimeout = setTimeout(() => {
+        gatherQuickAdjustments();
+        loadDashboardRecommendations();
+    }, 500);
 }
 
 // ==================== RECOMMENDATIONS ====================
@@ -1229,13 +1359,22 @@ window.completeOnboarding = completeOnboarding;
 window.skipAndComplete = skipAndComplete;
 window.showDashboard = showDashboard;
 window.showRecommendations = showRecommendations;
+window.refreshRecommendations = refreshRecommendations;
 window.editPreference = editPreference;
 window.selectEditOption = selectEditOption;
 window.toggleEditOption = toggleEditOption;
 window.closeEditModal = closeEditModal;
 window.savePreferenceEdit = savePreferenceEdit;
 window.editAllPreferences = editAllPreferences;
-window.showSettings = showSettings;
+window.openSettings = openSettings;
+window.closeSettings = closeSettings;
+window.showSettingsTab = showSettingsTab;
+window.changePassword = changePassword;
+window.deleteAccount = deleteAccount;
+window.saveNotificationSettings = saveNotificationSettings;
+window.selectQuickGroup = selectQuickGroup;
+window.toggleQuickTravelTime = toggleQuickTravelTime;
+window.onQuickAdjustmentChange = onQuickAdjustmentChange;
 window.loadDigest = loadDigest;
 window.showDetail = showDetail;
 window.selectSlot = selectSlot;
