@@ -187,8 +187,6 @@
                             <div class="card-label">With Friends</div>
                         </div>
                     </div>
-                    
-                    <p class="save-indicator">💾 This will be saved to your account</p>
                 </div>
 
                 <!-- Step 2: Location -->
@@ -331,7 +329,6 @@
                             </div>
                         </div>
                         
-                        <p class="save-indicator">💾 This will be saved to your account</p>
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
                     </div>
                 </div>
@@ -381,7 +378,6 @@
                     </div>
                     
                     <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
-                    <p class="save-indicator">💾 This will be saved to your account</p>
                     
                     <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
                     <button class="btn-link" onclick="goToStep(2)">← Back</button>
@@ -429,8 +425,6 @@
                             </div>
                         </div>
                     </div>
-                    
-                    <p class="save-indicator">💾 This will be saved to your account</p>
                     
                     <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
                     <button class="btn-link" onclick="goToStep(3)">← Back</button>
@@ -756,6 +750,32 @@
             <div class="modal-content">
                 <span class="close">&times;</span>
                 <div id="detail-content"></div>
+            </div>
+        </div>
+        
+        <!-- Signup Prompt Modal (after onboarding) -->
+        <div id="signup-prompt-modal" class="modal">
+            <div class="modal-content signup-prompt">
+                <h2>🎉 You're all set!</h2>
+                <p class="prompt-subtitle">Want to save your preferences for next time?</p>
+                
+                <div class="prompt-benefits">
+                    <div class="benefit-item">
+                        <span class="benefit-icon">💾</span>
+                        <span>Save your preferences</span>
+                    </div>
+                    <div class="benefit-item">
+                        <span class="benefit-icon">📧</span>
+                        <span>Get weekly weekend ideas</span>
+                    </div>
+                    <div class="benefit-item">
+                        <span class="benefit-icon">⚡</span>
+                        <span>Faster recommendations next time</span>
+                    </div>
+                </div>
+                
+                <button class="btn btn-primary" onclick="signupFromPrompt()">Create Free Account</button>
+                <button class="btn-link" onclick="skipSignupAndContinue()">Skip for now — show me recommendations</button>
             </div>
         </div>
     </div>

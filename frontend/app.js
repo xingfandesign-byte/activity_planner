@@ -38,50 +38,46 @@ async function initApp() {
     authToken = localStorage.getItem('auth_token');
     const userId = localStorage.getItem('user_id');
     
-    if (!authToken || !userId) {
-        // No account - show auth screen
-        showAuthScreen();
+    // Check for saved preferences (even without account)
+    const savedPrefs = localStorage.getItem('weekend_planner_preferences');
+    
+    if (authToken && userId) {
+        // Returning user with account - validate and load
+        try {
+            const response = await fetch(`${API_BASE}/user/preferences`, {
+                headers: { 'Authorization': `Bearer ${authToken}` }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                currentUser = { id: userId, ...data.user };
+                
+                if (data.preferences && Object.keys(data.preferences).length > 0) {
+                    onboardingData = { ...onboardingData, ...data.preferences };
+                    showDashboard();
+                    return;
+                }
+            } else if (response.status === 401) {
+                // Token expired
+                localStorage.removeItem('auth_token');
+                localStorage.removeItem('user_id');
+            }
+        } catch (error) {
+            console.error('Error loading user data:', error);
+        }
+    }
+    
+    // Check local preferences (guest or failed auth)
+    if (savedPrefs) {
+        onboardingData = JSON.parse(savedPrefs);
+        currentUser = { id: 'guest', isGuest: true };
+        showDashboard();
         return;
     }
     
-    // Validate token and load preferences
-    try {
-        const response = await fetch(`${API_BASE}/user/preferences`, {
-            headers: { 'Authorization': `Bearer ${authToken}` }
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            currentUser = { id: userId, ...data.user };
-            
-            if (data.preferences && Object.keys(data.preferences).length > 0) {
-                // Has saved preferences - show returning user dashboard
-                onboardingData = { ...onboardingData, ...data.preferences };
-                showDashboard();
-            } else {
-                // Has account but no preferences - show onboarding from step 1
-                showOnboarding();
-            }
-        } else if (response.status === 401) {
-            // Token expired
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('user_id');
-            showAuthScreen();
-        } else {
-            // Other error - show auth
-            showAuthScreen();
-        }
-    } catch (error) {
-        console.error('Error loading user data:', error);
-        // For demo, check local storage for preferences
-        const savedPrefs = localStorage.getItem('weekend_planner_preferences');
-        if (savedPrefs) {
-            onboardingData = JSON.parse(savedPrefs);
-            showDashboard();
-        } else {
-            showAuthScreen();
-        }
-    }
+    // First-time user - go directly to onboarding (guest path)
+    currentUser = { id: 'guest_' + Date.now(), isGuest: true };
+    showOnboarding();
 }
 
 function setupEventListeners() {
@@ -443,7 +439,7 @@ async function signupWithEmail(email, password) {
                 method: 'email',
                 email, 
                 password,
-                email_digest: document.getElementById('email-digest-optin').checked
+                email_digest: document.getElementById('email-digest-optin')?.checked ?? true
             })
         });
         
@@ -452,8 +448,16 @@ async function signupWithEmail(email, password) {
             localStorage.setItem('auth_token', data.token);
             localStorage.setItem('user_id', data.user_id);
             authToken = data.token;
-            currentUser = { id: data.user_id, email };
-            showOnboarding();
+            currentUser = { id: data.user_id, email, isGuest: false };
+            
+            // Check if we have preferences (coming from onboarding signup prompt)
+            const savedPrefs = localStorage.getItem('weekend_planner_preferences');
+            if (savedPrefs) {
+                savePreferences();
+                showDashboard();
+            } else {
+                showOnboarding();
+            }
         } else {
             // Demo mode
             simulateSignup(email);
@@ -498,8 +502,18 @@ function simulateSignup(identifier) {
     localStorage.setItem('auth_token', 'demo_token');
     localStorage.setItem('user_id', userId);
     authToken = 'demo_token';
-    currentUser = { id: userId, email: identifier };
-    showOnboarding();
+    currentUser = { id: userId, email: identifier, isGuest: false };
+    
+    // Check if we have preferences (coming from onboarding signup prompt)
+    const savedPrefs = localStorage.getItem('weekend_planner_preferences');
+    if (savedPrefs) {
+        // Save to server and go to dashboard
+        savePreferences();
+        showDashboard();
+    } else {
+        // Fresh signup - go to onboarding
+        showOnboarding();
+    }
 }
 
 function continueAsGuest() {
@@ -754,16 +768,39 @@ async function completeOnboarding() {
     onboardingData.avoid = Array.from(document.querySelectorAll('input[name="avoid"]:checked'))
         .map(cb => cb.value);
     
-    // Save preferences
+    // Save preferences locally first
     await savePreferences();
     
-    // Show dashboard instead of directly going to planner
-    showDashboard();
+    // If guest user, prompt to sign up
+    if (!authToken || currentUser?.isGuest) {
+        showSignupPrompt();
+    } else {
+        showDashboard();
+    }
 }
 
 function skipAndComplete() {
     onboardingData.interests = ['nature', 'arts_culture', 'entertainment'];
     completeOnboarding();
+}
+
+function showSignupPrompt() {
+    document.getElementById('signup-prompt-modal').classList.add('active');
+}
+
+function closeSignupPrompt() {
+    document.getElementById('signup-prompt-modal').classList.remove('active');
+}
+
+function skipSignupAndContinue() {
+    closeSignupPrompt();
+    showDashboard();
+}
+
+function signupFromPrompt() {
+    closeSignupPrompt();
+    showScreen('auth-screen');
+    showSignupForm();
 }
 
 async function savePreferences() {
@@ -1375,6 +1412,10 @@ window.saveNotificationSettings = saveNotificationSettings;
 window.selectQuickGroup = selectQuickGroup;
 window.toggleQuickTravelTime = toggleQuickTravelTime;
 window.onQuickAdjustmentChange = onQuickAdjustmentChange;
+window.showSignupPrompt = showSignupPrompt;
+window.closeSignupPrompt = closeSignupPrompt;
+window.skipSignupAndContinue = skipSignupAndContinue;
+window.signupFromPrompt = signupFromPrompt;
 window.loadDigest = loadDigest;
 window.showDetail = showDetail;
 window.selectSlot = selectSlot;
