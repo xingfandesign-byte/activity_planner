@@ -222,6 +222,15 @@ function showAuthScreen() {
     showLoginForm();
 }
 
+function showAuthFromOnboarding(type) {
+    showScreen('auth-screen');
+    if (type === 'signup') {
+        showSignupForm();
+    } else {
+        showLoginForm();
+    }
+}
+
 function showOnboarding() {
     showScreen('onboarding');
     initializeOnboarding();
@@ -1385,6 +1394,7 @@ async function handleFeedback(recId, action, event) {
 
 window.showLoginForm = showLoginForm;
 window.showSignupForm = showSignupForm;
+window.showAuthFromOnboarding = showAuthFromOnboarding;
 window.setAuthMethod = setAuthMethod;
 window.handleLogin = handleLogin;
 window.handleSignup = handleSignup;

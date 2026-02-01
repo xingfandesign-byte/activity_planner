@@ -414,6 +414,25 @@ h3 {
     margin: 1rem 0;
 }
 
+.onboarding-auth-link {
+    text-align: center;
+    color: #666;
+    font-size: 0.9rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+}
+
+.onboarding-auth-link a {
+    color: #667eea;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.onboarding-auth-link a:hover {
+    text-decoration: underline;
+}
+
 /* ==================== SELECTION GRID ==================== */
 
 .selection-grid {
