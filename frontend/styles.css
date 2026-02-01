@@ -11,6 +11,35 @@ body {
     color: #333;
 }
 
+/* App Loading State */
+.app-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.app-loading.hidden {
+    display: none;
+}
+
+.loading-content {
+    text-align: center;
+    color: white;
+}
+
+.loading-content h1 {
+    font-size: 4rem;
+    color: white;
+    margin-bottom: 1rem;
+}
+
+.loading-content p {
+    font-size: 1.2rem;
+    opacity: 0.9;
+}
+
 .screen {
     display: none;
     min-height: 100vh;

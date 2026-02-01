@@ -8,7 +8,15 @@
 </head>
 <body>
     <div id="app">
-        <!-- Auth Screen (Login/Signup) -->
+        <!-- Loading State (shown until JS decides which screen) -->
+        <div id="app-loading" class="app-loading">
+            <div class="loading-content">
+                <h1>🎉</h1>
+                <p>Loading Weekend Planner...</p>
+            </div>
+        </div>
+        
+        <!-- Auth Screen (Login/Signup) - Only for returning users who need to sign in -->
         <div id="auth-screen" class="screen">
             <div class="container auth-container">
                 <!-- Login Form -->

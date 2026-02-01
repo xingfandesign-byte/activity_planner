@@ -210,6 +210,9 @@ function setupOTPInputs() {
 // ==================== SCREEN MANAGEMENT ====================
 
 function showScreen(screenId) {
+    // Hide loading state
+    document.getElementById('app-loading')?.classList.add('hidden');
+    
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(screenId)?.classList.add('active');
 }
@@ -1424,3 +1427,11 @@ window.handleFeedback = handleFeedback;
 window.resendOTP = () => alert('Demo: Code is 123456');
 window.resendSignupOTP = () => alert('Demo: Code is 123456');
 window.showForgotPassword = () => alert('Password reset coming soon!');
+window.clearCache = clearCache;
+
+function clearCache() {
+    localStorage.clear();
+    sessionStorage.clear();
+    alert('Cache cleared! Refreshing...');
+    window.location.reload();
+}
