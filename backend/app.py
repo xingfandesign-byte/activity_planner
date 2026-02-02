@@ -9,7 +9,28 @@ from datetime import datetime, timedelta
 import json
 import os
 import requests
+import hashlib
+import secrets
 from functools import wraps
+
+
+def hash_password(password, salt=None):
+    """Hash a password with salt"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    hashed = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+    return f"{salt}${hashed.hex()}"
+
+
+def verify_password(password, stored_hash):
+    """Verify a password against stored hash"""
+    try:
+        salt, hash_value = stored_hash.split('$')
+        new_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+        return new_hash.hex() == hash_value
+    except:
+        # Fallback for plain text passwords (migration)
+        return password == stored_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -178,13 +199,31 @@ MOCK_PLACES = [
     }
 ]
 
+def get_user_id_from_token(token):
+    """Extract user ID from auth token"""
+    token_data = auth_tokens.get(token)
+    if token_data is None:
+        return None
+    # Handle both old format (string) and new format (dict)
+    if isinstance(token_data, dict):
+        return token_data.get('user_id')
+    return token_data  # Old format: token_data is the user_id string
+
+
 def get_user_id():
     """Get current user ID from session or header"""
     # Try session first (for cookie-based auth)
     user_id = session.get('user_id')
     if user_id:
         return user_id
-    # Try header (for API-based auth)
+    # Try Authorization header with Bearer token
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header[7:]
+        user_id = get_user_id_from_token(token)
+        if user_id:
+            return user_id
+    # Try X-User-Id header (for API-based auth)
     user_id = request.headers.get('X-User-Id')
     if user_id:
         return user_id
@@ -1164,22 +1203,28 @@ def signup():
         if email in users_db:
             return jsonify({"error": "User already exists"}), 409
         
-        # Create user
+        # Create user with hashed password
         user_id = f"user_{len(users_db) + 1}_{datetime.now().timestamp()}"
         users_db[email] = {
             "user_id": user_id,
             "email": email,
-            "password": password,  # In production, hash this!
+            "password": hash_password(password),
             "created_at": datetime.now().isoformat(),
             "email_digest": data.get('email_digest', True)
         }
         
-        # Create token
-        token = f"token_{user_id}_{datetime.now().timestamp()}"
-        auth_tokens[token] = user_id
+        # Create secure token
+        token = secrets.token_urlsafe(32)
+        auth_tokens[token] = {
+            'user_id': user_id,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        print(f"[AUTH] New user created: {email}")
         
         return jsonify({
             "user_id": user_id,
+            "email": email,
             "token": token,
             "status": "created"
         })
@@ -1198,20 +1243,26 @@ def login():
     
     # Check credentials
     user = users_db.get(email)
-    if not user or user.get('password') != password:
-        return jsonify({"error": "Invalid credentials"}), 401
+    if not user or not verify_password(password, user.get('password', '')):
+        return jsonify({"error": "Invalid email or password"}), 401
     
     user_id = user['user_id']
     
-    # Create token
-    token = f"token_{user_id}_{datetime.now().timestamp()}"
-    auth_tokens[token] = user_id
+    # Create secure token
+    token = secrets.token_urlsafe(32)
+    auth_tokens[token] = {
+        'user_id': user_id,
+        'created_at': datetime.now().isoformat()
+    }
     
     # Get preferences
     prefs = preferences_db.get(user_id)
     
+    print(f"[AUTH] User logged in: {email}")
+    
     return jsonify({
         "user_id": user_id,
+        "email": email,
         "token": token,
         "preferences": prefs,
         "status": "authenticated"
@@ -1257,9 +1308,12 @@ def verify_phone_otp():
     else:
         user_id = users_db[phone]['user_id']
     
-    # Create token
-    token = f"token_{user_id}_{datetime.now().timestamp()}"
-    auth_tokens[token] = user_id
+    # Create secure token
+    token = secrets.token_urlsafe(32)
+    auth_tokens[token] = {
+        'user_id': user_id,
+        'created_at': datetime.now().isoformat()
+    }
     
     # Get preferences
     prefs = preferences_db.get(user_id)
@@ -1488,7 +1542,7 @@ def get_user_preferences():
     
     if auth_header and auth_header.startswith('Bearer '):
         token = auth_header[7:]
-        user_id = auth_tokens.get(token)
+        user_id = get_user_id_from_token(token)
         
         if not user_id:
             return jsonify({"error": "Invalid token"}), 401

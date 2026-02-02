@@ -342,17 +342,22 @@ async function handleLogin() {
 async function loginWithEmail(email, password) {
     try {
         const response = await fetch(`${API_BASE}/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
         });
         
+        const data = await response.json();
+        
         if (response.ok) {
-            const data = await response.json();
             localStorage.setItem('auth_token', data.token);
             localStorage.setItem('user_id', data.user_id);
+            localStorage.setItem('user_email', email);
+            localStorage.setItem('auth_provider', 'email');
             authToken = data.token;
-            currentUser = { id: data.user_id };
+            currentUser = { id: data.user_id, email };
+            
+            console.log('[Auth] Login successful:', email);
             
             if (data.preferences) {
                 onboardingData = { ...onboardingData, ...data.preferences };
@@ -361,13 +366,12 @@ async function loginWithEmail(email, password) {
                 showOnboarding();
             }
         } else {
-            // Demo mode - simulate login
-            simulateLogin(email);
+            // Show actual error from server
+            alert(data.error || 'Invalid email or password');
         }
     } catch (error) {
         console.error('Login error:', error);
-        // Demo mode
-        simulateLogin(email);
+        alert('Unable to connect to server. Please try again.');
     }
 }
 
@@ -402,12 +406,17 @@ async function signupWithEmail(email, password) {
             })
         });
         
+        const data = await response.json();
+        
         if (response.ok) {
-            const data = await response.json();
             localStorage.setItem('auth_token', data.token);
             localStorage.setItem('user_id', data.user_id);
+            localStorage.setItem('user_email', email);
+            localStorage.setItem('auth_provider', 'email');
             authToken = data.token;
             currentUser = { id: data.user_id, email, isGuest: false };
+            
+            console.log('[Auth] Signup successful:', email);
             
             // Check if we have preferences (coming from onboarding signup prompt)
             const savedPrefs = localStorage.getItem('weekend_planner_preferences');
@@ -418,12 +427,12 @@ async function signupWithEmail(email, password) {
                 showOnboarding();
             }
         } else {
-            // Demo mode
-            simulateSignup(email);
+            // Show actual error from server
+            alert(data.error || 'Signup failed. Please try again.');
         }
     } catch (error) {
         console.error('Signup error:', error);
-        simulateSignup(email);
+        alert('Unable to connect to server. Please try again.');
     }
 }
 

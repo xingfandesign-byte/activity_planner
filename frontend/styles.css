@@ -157,7 +157,15 @@ h3 {
 .form-group input[type="tel"],
 .form-group input[type="password"],
 .form-group input[type="number"],
-.form-group input[type="time"],
+.form-group input[type="time"] {
+    width: 100%;
+    padding: 0.875rem;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: border-color 0.3s;
+}
+
 .form-group select {
     width: 100%;
     padding: 0.875rem;
