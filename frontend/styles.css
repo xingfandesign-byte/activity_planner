@@ -414,6 +414,67 @@ h3 {
     margin: 1rem 0;
 }
 
+/* Back Button - Chevron Style */
+.back-chevron {
+    position: absolute;
+    top: 1rem;
+    left: 1rem;
+    background: none;
+    border: none;
+    color: #667eea;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    line-height: 1;
+    transition: all 0.2s;
+    z-index: 10;
+}
+
+.back-chevron:hover {
+    color: #5568d3;
+    transform: translateX(-3px);
+}
+
+.onboarding-step {
+    position: relative;
+}
+
+.substep {
+    position: relative;
+}
+
+/* Back Button - Chevron Style */
+.back-chevron {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: none;
+    border: none;
+    color: #667eea;
+    font-size: 2rem;
+    font-weight: 300;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    line-height: 1;
+    transition: all 0.2s;
+    z-index: 10;
+}
+
+.back-chevron:hover {
+    color: #5568d3;
+    transform: translateX(-3px);
+}
+
+.onboarding-step {
+    position: relative;
+    padding-top: 2rem;
+}
+
+.substep {
+    position: relative;
+    padding-top: 2rem;
+}
+
 .onboarding-auth-link {
     text-align: center;
     color: #666;

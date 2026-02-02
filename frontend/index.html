@@ -161,7 +161,7 @@
                         </button>
                         
                         <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
-                        <button class="btn-link" onclick="goToStep(1)">← Back</button>
+                        <button class="back-chevron" onclick="goToStep(1)" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2b" class="substep">
@@ -194,7 +194,7 @@
                             <button class="btn btn-primary" onclick="submitLocation('address')">Continue →</button>
                         </div>
                         
-                        <button class="btn-link" onclick="showSubstep('2a')">← Back</button>
+                        <button class="back-chevron" onclick="showSubstep('2a')" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2c" class="substep">
@@ -210,7 +210,7 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
-                        <button class="btn-link" onclick="goBackFromLocationConfirm()">← Back</button>
+                        <button class="back-chevron" onclick="goBackFromLocationConfirm()" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2d" class="substep">
@@ -291,7 +291,7 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
-                        <button class="btn-link" onclick="showSubstep('2c')">← Back</button>
+                        <button class="back-chevron" onclick="showSubstep('2c')" title="Back">‹</button>
                     </div>
                 </div>
 
@@ -342,7 +342,7 @@
                     <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
                     
                     <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
-                    <button class="btn-link" onclick="goToStep(2)">← Back</button>
+                    <button class="back-chevron" onclick="goToStep(2)" title="Back">‹</button>
                 </div>
 
                 <!-- Step 4: Activity Style -->
@@ -389,7 +389,7 @@
                     </div>
                     
                     <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
-                    <button class="btn-link" onclick="goToStep(3)">← Back</button>
+                    <button class="back-chevron" onclick="goToStep(3)" title="Back">‹</button>
                 </div>
 
                 <!-- Step 5: Constraints (Optional) -->
@@ -439,8 +439,8 @@
                     </div>
                     
                     <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
-                    <button class="btn-link" onclick="goToStep(4)">← Back</button>
                     <button class="btn-link" onclick="skipAndComplete()">Skip & use defaults</button>
+                    <button class="back-chevron" onclick="goToStep(4)" title="Back">‹</button>
                 </div>
                 
                 <!-- Sign in / Sign up link for existing users -->
