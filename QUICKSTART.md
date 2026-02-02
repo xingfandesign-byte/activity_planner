@@ -31,6 +31,29 @@ python3 -m http.server 8000
 
 Then open http://localhost:8000 in your browser.
 
+## Environment Setup (Optional)
+
+### Google Places API
+
+To get real location data instead of mock data, set up a Google Places API key:
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select existing
+3. Enable the **Places API**
+4. Create an API key under Credentials
+5. Set the environment variable:
+
+```bash
+export GOOGLE_PLACES_API_KEY="your-api-key-here"
+```
+
+Or add to your `.env` file:
+```
+GOOGLE_PLACES_API_KEY=your-api-key-here
+```
+
+**Note:** The app works without an API key using mock data for development.
+
 ## First Time Setup
 
 1. **Complete Onboarding**:

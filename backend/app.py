@@ -8,11 +8,19 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import json
 import os
+import requests
 from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 CORS(app, supports_credentials=True)
+
+# Google Places API Configuration
+GOOGLE_PLACES_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '')
+GOOGLE_PLACES_BASE_URL = 'https://maps.googleapis.com/maps/api/place'
+
+# Cache for API responses (simple in-memory cache)
+places_cache = {}
 
 # In-memory storage (replace with database in production)
 users_db = {}
@@ -390,6 +398,227 @@ def get_digest():
     
     return jsonify(response_data)
 
+# ========== GOOGLE PLACES API INTEGRATION ==========
+
+def search_google_places(location, category, radius_meters=10000):
+    """Search for places using Google Places API"""
+    if not GOOGLE_PLACES_API_KEY:
+        print("[PLACES API] No API key configured, using mock data")
+        return None
+    
+    # Map our categories to Google Places types
+    category_to_type = {
+        'parks': 'park',
+        'museums': 'museum',
+        'food': 'restaurant',
+        'attractions': 'tourist_attraction',
+        'events': 'event_venue',
+        'shopping': 'shopping_mall',
+        'entertainment': 'movie_theater',
+        'nature': 'natural_feature'
+    }
+    
+    place_type = category_to_type.get(category, 'point_of_interest')
+    
+    # Create cache key
+    cache_key = f"{location.get('lat', 0)}_{location.get('lng', 0)}_{category}_{radius_meters}"
+    
+    # Check cache (expires after 1 hour)
+    if cache_key in places_cache:
+        cached = places_cache[cache_key]
+        if (datetime.now() - cached['timestamp']).seconds < 3600:
+            print(f"[PLACES API] Cache hit for {category}")
+            return cached['data']
+    
+    try:
+        # Nearby Search request
+        url = f"{GOOGLE_PLACES_BASE_URL}/nearbysearch/json"
+        params = {
+            'location': f"{location.get('lat', 37.7749)},{location.get('lng', -122.4194)}",
+            'radius': radius_meters,
+            'type': place_type,
+            'key': GOOGLE_PLACES_API_KEY
+        }
+        
+        print(f"[PLACES API] Searching for {category} near {params['location']}")
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        if data.get('status') == 'OK':
+            places = data.get('results', [])
+            print(f"[PLACES API] Found {len(places)} {category} places")
+            
+            # Cache the result
+            places_cache[cache_key] = {
+                'data': places,
+                'timestamp': datetime.now()
+            }
+            
+            return places
+        else:
+            print(f"[PLACES API] Error: {data.get('status')} - {data.get('error_message', '')}")
+            return None
+            
+    except Exception as e:
+        print(f"[PLACES API] Exception: {str(e)}")
+        return None
+
+
+def get_place_details(place_id):
+    """Get detailed information about a place"""
+    if not GOOGLE_PLACES_API_KEY:
+        return None
+    
+    # Check cache
+    cache_key = f"detail_{place_id}"
+    if cache_key in places_cache:
+        cached = places_cache[cache_key]
+        if (datetime.now() - cached['timestamp']).seconds < 86400:  # 24 hour cache
+            return cached['data']
+    
+    try:
+        url = f"{GOOGLE_PLACES_BASE_URL}/details/json"
+        params = {
+            'place_id': place_id,
+            'fields': 'name,formatted_address,geometry,rating,price_level,opening_hours,photos,types,user_ratings_total,website,formatted_phone_number',
+            'key': GOOGLE_PLACES_API_KEY
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        
+        if data.get('status') == 'OK':
+            result = data.get('result', {})
+            places_cache[cache_key] = {
+                'data': result,
+                'timestamp': datetime.now()
+            }
+            return result
+        
+        return None
+        
+    except Exception as e:
+        print(f"[PLACES API] Details exception: {str(e)}")
+        return None
+
+
+def calculate_distance(lat1, lng1, lat2, lng2):
+    """Calculate distance between two points in miles (using Haversine formula)"""
+    import math
+    
+    R = 3959  # Earth's radius in miles
+    
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lng = math.radians(lng2 - lng1)
+    
+    a = math.sin(delta_lat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lng/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    
+    return R * c
+
+
+def convert_google_place_to_item(place, user_location, index):
+    """Convert Google Places API result to our recommendation format"""
+    
+    # Extract location
+    geometry = place.get('geometry', {})
+    location = geometry.get('location', {})
+    place_lat = location.get('lat', 0)
+    place_lng = location.get('lng', 0)
+    
+    # Calculate distance
+    user_lat = user_location.get('lat', 37.7749)
+    user_lng = user_location.get('lng', -122.4194)
+    distance = calculate_distance(user_lat, user_lng, place_lat, place_lng)
+    
+    # Estimate travel time (rough: 2 min per mile for driving)
+    travel_time = max(5, int(distance * 2))
+    
+    # Get price level
+    price_level = place.get('price_level', 1)
+    price_flags = {0: 'free', 1: '$', 2: '$$', 3: '$$$', 4: '$$$$'}
+    price_flag = price_flags.get(price_level, '$')
+    
+    # Determine category from types
+    types = place.get('types', [])
+    category = 'attractions'
+    if 'park' in types or 'natural_feature' in types:
+        category = 'parks'
+    elif 'museum' in types or 'art_gallery' in types:
+        category = 'museums'
+    elif 'restaurant' in types or 'food' in types or 'cafe' in types:
+        category = 'food'
+    elif 'shopping_mall' in types or 'store' in types:
+        category = 'shopping'
+    
+    # Check if kid-friendly (heuristic based on types)
+    kid_friendly = any(t in types for t in ['park', 'zoo', 'aquarium', 'amusement_park', 'museum'])
+    
+    # Indoor/outdoor
+    outdoor_types = ['park', 'natural_feature', 'zoo', 'stadium', 'campground']
+    indoor_outdoor = 'outdoor' if any(t in types for t in outdoor_types) else 'indoor'
+    
+    # Get photo URL if available
+    photos = place.get('photos', [])
+    photo_url = None
+    if photos and GOOGLE_PLACES_API_KEY:
+        photo_ref = photos[0].get('photo_reference')
+        if photo_ref:
+            photo_url = f"{GOOGLE_PLACES_BASE_URL}/photo?maxwidth=400&photo_reference={photo_ref}&key={GOOGLE_PLACES_API_KEY}"
+    
+    now = datetime.now()
+    week = f"{now.year}-{now.isocalendar()[1]:02d}"
+    
+    return {
+        "rec_id": f"gp_{week}_{index}",
+        "type": "place",
+        "place_id": place.get('place_id', ''),
+        "title": place.get('name', 'Unknown Place'),
+        "category": category,
+        "distance_miles": round(distance, 1),
+        "travel_time_min": travel_time,
+        "price_flag": price_flag,
+        "kid_friendly": kid_friendly,
+        "indoor_outdoor": indoor_outdoor,
+        "explanation": f"Highly rated {category} spot nearby",
+        "source_url": f"https://maps.google.com/?q={place_lat},{place_lng}",
+        "address": place.get('vicinity', place.get('formatted_address', '')),
+        "rating": place.get('rating', 4.0),
+        "total_ratings": place.get('user_ratings_total', 0),
+        "photo_url": photo_url,
+        "google_place": True
+    }
+
+
+@app.route('/v1/places/search', methods=['POST'])
+def search_places():
+    """Search for places using Google Places API"""
+    data = request.json
+    location = data.get('location', {'lat': 37.7749, 'lng': -122.4194})
+    categories = data.get('categories', ['parks', 'museums', 'food'])
+    radius = data.get('radius_meters', 10000)
+    
+    all_places = []
+    
+    for category in categories:
+        places = search_google_places(location, category, radius)
+        if places:
+            for i, place in enumerate(places[:5]):  # Limit to 5 per category
+                item = convert_google_place_to_item(place, location, len(all_places))
+                all_places.append(item)
+    
+    # Sort by rating
+    all_places.sort(key=lambda x: (x.get('rating', 0), -x.get('distance_miles', 100)), reverse=True)
+    
+    return jsonify({
+        "places": all_places[:10],  # Return top 10
+        "total": len(all_places),
+        "source": "google_places" if GOOGLE_PLACES_API_KEY else "mock_data"
+    })
+
+
 # ========== AI-POWERED RECOMMENDATIONS ==========
 
 @app.route('/v1/recommendations/ai', methods=['POST'])
@@ -398,24 +627,140 @@ def get_ai_recommendations():
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
+    use_google_places = data.get('use_google_places', True)
     
     print(f"[AI] Received recommendation request")
     print(f"[AI] User profile: {json.dumps(profile, indent=2)}")
     print(f"[AI] Prompt length: {len(prompt)} chars")
+    print(f"[AI] Use Google Places: {use_google_places}")
     
-    # For now, generate smart recommendations based on profile
-    # In production, this would call an AI model (OpenAI, Claude, etc.)
+    items = []
+    source = "mock_data"
     
-    items = generate_personalized_recommendations(profile)
+    # Try Google Places API first if enabled and configured
+    if use_google_places and GOOGLE_PLACES_API_KEY:
+        print("[AI] Attempting to use Google Places API")
+        items = generate_recommendations_from_google_places(profile)
+        if items:
+            source = "google_places"
+            print(f"[AI] Got {len(items)} recommendations from Google Places")
+    
+    # Fall back to mock data if Google Places didn't work
+    if not items:
+        print("[AI] Using mock data for recommendations")
+        items = generate_personalized_recommendations(profile)
+        source = "mock_data"
     
     response_data = {
         "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
         "generated_at": datetime.now().isoformat(),
         "ai_powered": True,
+        "source": source,
         "items": items
     }
     
     return jsonify(response_data)
+
+
+def generate_recommendations_from_google_places(profile):
+    """Generate recommendations using Google Places API"""
+    
+    location = profile.get('location', {})
+    interests = profile.get('interests', [])
+    travel_times = profile.get('travel_time_ranges', ['15-30'])
+    kid_friendly = profile.get('kid_friendly', False)
+    budget = profile.get('budget', 'moderate')
+    
+    # Map interests to Google Places categories
+    interest_to_category = {
+        'nature': 'parks',
+        'arts_culture': 'museums',
+        'food_drinks': 'food',
+        'adventure': 'attractions',
+        'learning': 'museums',
+        'entertainment': 'entertainment',
+        'relaxation': 'parks',
+        'shopping': 'shopping',
+        'events': 'attractions'
+    }
+    
+    categories = list(set([interest_to_category.get(i, 'attractions') for i in interests]))
+    if not categories:
+        categories = ['parks', 'museums', 'food']
+    
+    # Determine search radius based on travel time
+    max_travel = 30
+    if '60+' in travel_times:
+        max_travel = 90
+    elif '30-60' in travel_times:
+        max_travel = 60
+    elif '15-30' in travel_times:
+        max_travel = 30
+    elif '0-15' in travel_times:
+        max_travel = 15
+    
+    # Convert travel time to approximate radius in meters (assuming ~30 mph average)
+    radius_meters = int(max_travel * 0.5 * 1609)  # half of max travel time at 30mph, converted to meters
+    radius_meters = min(radius_meters, 50000)  # Max 50km radius
+    
+    all_places = []
+    
+    # Search for each category
+    for category in categories[:3]:  # Limit to 3 categories
+        places = search_google_places(location, category, radius_meters)
+        if places:
+            for place in places[:5]:  # Top 5 per category
+                item = convert_google_place_to_item(place, location, len(all_places))
+                
+                # Apply filters
+                if kid_friendly and not item.get('kid_friendly'):
+                    continue
+                
+                # Budget filter
+                if budget == 'free' and item.get('price_flag') != 'free':
+                    continue
+                
+                # Add personalized explanation
+                item['explanation'] = generate_explanation_for_google_place(item, profile)
+                
+                all_places.append(item)
+    
+    # Sort by relevance (rating + proximity)
+    all_places.sort(key=lambda x: (x.get('rating', 0) * 2 - x.get('distance_miles', 10) * 0.1), reverse=True)
+    
+    return all_places[:5]  # Return top 5
+
+
+def generate_explanation_for_google_place(place, profile):
+    """Generate a personalized explanation for a Google Place"""
+    
+    group_type = profile.get('group_type', 'solo')
+    
+    group_phrases = {
+        'solo': "Perfect for solo exploration",
+        'couple': "Great spot for a date",
+        'family': "Family-friendly destination",
+        'friends': "Fun place to hang out"
+    }
+    
+    parts = [group_phrases.get(group_type, "Recommended for you")]
+    
+    rating = place.get('rating', 0)
+    if rating >= 4.5:
+        parts.append(f"★ {rating} highly rated")
+    elif rating >= 4.0:
+        parts.append(f"★ {rating} well reviewed")
+    
+    distance = place.get('distance_miles', 0)
+    if distance <= 5:
+        parts.append(f"just {place.get('travel_time_min', 10)} min away")
+    else:
+        parts.append(f"{int(distance)} miles away")
+    
+    if place.get('price_flag') == 'free':
+        parts.append("and it's free!")
+    
+    return " — ".join(parts)
 
 
 def generate_personalized_recommendations(profile):
