@@ -5,6 +5,7 @@ const API_BASE = 'http://localhost:5001/v1';
 let currentUser = null;
 let authToken = null;
 let currentStep = 1;
+let currentSubstep = '2a';
 let editingPreference = null;
 
 let onboardingData = {
@@ -488,6 +489,8 @@ function initializeOnboarding() {
     });
     
     currentStep = 1;
+    currentSubstep = '2a';
+    updateBackButton();
 }
 
 function goToStep(step) {
@@ -527,6 +530,7 @@ function goToStep(step) {
     }
     
     currentStep = step;
+    updateBackButton();
     document.querySelector('.onboarding-container')?.scrollTo(0, 0);
 }
 
@@ -540,6 +544,54 @@ function showSubstep(substep) {
     if (target) {
         target.classList.add('active');
         target.style.display = 'block';
+    }
+    
+    currentSubstep = substep;
+    updateBackButton();
+}
+
+// Global back navigation
+function goBack() {
+    if (currentStep === 1) {
+        // First step - no back action (or could go to auth)
+        return;
+    }
+    
+    if (currentStep === 2) {
+        // Handle substep navigation within step 2
+        if (currentSubstep === '2a') {
+            goToStep(1);
+        } else if (currentSubstep === '2b') {
+            showSubstep('2a');
+        } else if (currentSubstep === '2c') {
+            // Go back based on how user entered location
+            if (onboardingData.home_location?.type === 'geolocation') {
+                showSubstep('2a');
+            } else {
+                showSubstep('2b');
+            }
+            onboardingData.home_location = null;
+        } else if (currentSubstep === '2d') {
+            showSubstep('2c');
+        }
+    } else if (currentStep === 3) {
+        goToStep(2);
+    } else if (currentStep === 4) {
+        goToStep(3);
+    } else if (currentStep === 5) {
+        goToStep(4);
+    }
+}
+
+function updateBackButton() {
+    const backBtn = document.getElementById('onboarding-back-btn');
+    if (!backBtn) return;
+    
+    // Hide back button on step 1
+    if (currentStep === 1) {
+        backBtn.classList.add('hidden');
+    } else {
+        backBtn.classList.remove('hidden');
     }
 }
 
@@ -1321,6 +1373,7 @@ window.signInWithOAuth = signInWithOAuth;
 window.handleSignOut = handleSignOut;
 window.goToStep = goToStep;
 window.showSubstep = showSubstep;
+window.goBack = goBack;
 window.submitLocation = submitLocation;
 window.completeLocationStep = completeLocationStep;
 window.goBackFromLocationConfirm = goBackFromLocationConfirm;

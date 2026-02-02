@@ -110,17 +110,20 @@
         <!-- First-Time Onboarding Screen -->
         <div id="onboarding" class="screen">
             <div class="container onboarding-container">
-                <!-- Progress Indicator -->
-                <div class="progress-bar">
-                    <div class="progress-step active" data-step="1">1</div>
-                    <div class="progress-line"></div>
-                    <div class="progress-step" data-step="2">2</div>
-                    <div class="progress-line"></div>
-                    <div class="progress-step" data-step="3">3</div>
-                    <div class="progress-line"></div>
-                    <div class="progress-step" data-step="4">4</div>
-                    <div class="progress-line"></div>
-                    <div class="progress-step" data-step="5">5</div>
+                <!-- Progress Indicator with Back Button -->
+                <div class="progress-header">
+                    <button id="onboarding-back-btn" class="back-chevron" onclick="goBack()" title="Back">‹</button>
+                    <div class="progress-bar">
+                        <div class="progress-step active" data-step="1">1</div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="2">2</div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="3">3</div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="4">4</div>
+                        <div class="progress-line"></div>
+                        <div class="progress-step" data-step="5">5</div>
+                    </div>
                 </div>
 
                 <!-- Step 1: Group Type -->
@@ -161,7 +164,6 @@
                         </button>
                         
                         <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
-                        <button class="back-chevron" onclick="goToStep(1)" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2b" class="substep">
@@ -193,8 +195,6 @@
                             <p class="privacy-note">🔒 We only use this for travel times</p>
                             <button class="btn btn-primary" onclick="submitLocation('address')">Continue →</button>
                         </div>
-                        
-                        <button class="back-chevron" onclick="showSubstep('2a')" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2c" class="substep">
@@ -210,7 +210,6 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
-                        <button class="back-chevron" onclick="goBackFromLocationConfirm()" title="Back">‹</button>
                     </div>
                     
                     <div id="step-2d" class="substep">
@@ -291,7 +290,6 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
-                        <button class="back-chevron" onclick="showSubstep('2c')" title="Back">‹</button>
                     </div>
                 </div>
 
@@ -342,7 +340,6 @@
                     <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
                     
                     <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
-                    <button class="back-chevron" onclick="goToStep(2)" title="Back">‹</button>
                 </div>
 
                 <!-- Step 4: Activity Style -->
@@ -389,7 +386,6 @@
                     </div>
                     
                     <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
-                    <button class="back-chevron" onclick="goToStep(3)" title="Back">‹</button>
                 </div>
 
                 <!-- Step 5: Constraints (Optional) -->
@@ -440,7 +436,6 @@
                     
                     <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
                     <button class="btn-link" onclick="skipAndComplete()">Skip & use defaults</button>
-                    <button class="back-chevron" onclick="goToStep(4)" title="Back">‹</button>
                 </div>
                 
                 <!-- Sign in / Sign up link for existing users -->
