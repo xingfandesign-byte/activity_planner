@@ -19,6 +19,11 @@ CORS(app, supports_credentials=True)
 GOOGLE_PLACES_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '')
 GOOGLE_PLACES_BASE_URL = 'https://maps.googleapis.com/maps/api/place'
 
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:5001/v1/auth/google/callback')
+
 # Cache for API responses (simple in-memory cache)
 places_cache = {}
 
@@ -1278,6 +1283,187 @@ def logout():
     
     session.clear()
     return jsonify({"status": "logged_out"})
+
+
+# ========== GOOGLE OAUTH ==========
+
+@app.route('/v1/auth/google/url', methods=['GET'])
+def get_google_auth_url():
+    """Get the Google OAuth authorization URL"""
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({"error": "Google OAuth not configured"}), 501
+    
+    # Generate a state token for CSRF protection
+    import secrets
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    
+    # Build the Google OAuth URL
+    params = {
+        'client_id': GOOGLE_CLIENT_ID,
+        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': 'openid email profile',
+        'state': state,
+        'access_type': 'offline',
+        'prompt': 'consent'
+    }
+    
+    auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + '&'.join(f'{k}={v}' for k, v in params.items())
+    
+    return jsonify({
+        "url": auth_url,
+        "configured": True
+    })
+
+
+@app.route('/v1/auth/google/callback', methods=['GET'])
+def google_callback():
+    """Handle Google OAuth callback"""
+    from urllib.parse import urlencode
+    
+    error = request.args.get('error')
+    if error:
+        # Redirect to frontend with error
+        return f'''
+        <html><body>
+        <script>
+            window.opener.postMessage({{ type: 'oauth_error', error: '{error}' }}, '*');
+            window.close();
+        </script>
+        </body></html>
+        '''
+    
+    code = request.args.get('code')
+    state = request.args.get('state')
+    
+    # Verify state token
+    stored_state = session.get('oauth_state')
+    if not stored_state or state != stored_state:
+        return f'''
+        <html><body>
+        <script>
+            window.opener.postMessage({{ type: 'oauth_error', error: 'Invalid state token' }}, '*');
+            window.close();
+        </script>
+        </body></html>
+        '''
+    
+    # Exchange code for tokens
+    token_url = 'https://oauth2.googleapis.com/token'
+    token_data = {
+        'code': code,
+        'client_id': GOOGLE_CLIENT_ID,
+        'client_secret': GOOGLE_CLIENT_SECRET,
+        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'grant_type': 'authorization_code'
+    }
+    
+    try:
+        token_response = requests.post(token_url, data=token_data, timeout=10)
+        tokens = token_response.json()
+        
+        if 'error' in tokens:
+            return f'''
+            <html><body>
+            <script>
+                window.opener.postMessage({{ type: 'oauth_error', error: '{tokens.get("error_description", tokens["error"])}' }}, '*');
+                window.close();
+            </script>
+            </body></html>
+            '''
+        
+        access_token = tokens.get('access_token')
+        
+        # Get user info from Google
+        userinfo_response = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {access_token}'},
+            timeout=10
+        )
+        userinfo = userinfo_response.json()
+        
+        google_id = userinfo.get('id')
+        email = userinfo.get('email')
+        name = userinfo.get('name', '')
+        picture = userinfo.get('picture', '')
+        
+        # Check if user exists, create if not
+        user_id = f"google_{google_id}"
+        
+        if user_id not in users_db:
+            users_db[user_id] = {
+                'id': user_id,
+                'email': email,
+                'name': name,
+                'picture': picture,
+                'provider': 'google',
+                'google_id': google_id,
+                'created_at': datetime.now().isoformat()
+            }
+            print(f"[AUTH] Created new Google user: {email}")
+        else:
+            # Update user info
+            users_db[user_id]['name'] = name
+            users_db[user_id]['picture'] = picture
+            print(f"[AUTH] Existing Google user logged in: {email}")
+        
+        # Generate auth token
+        import secrets
+        auth_token = secrets.token_urlsafe(32)
+        auth_tokens[auth_token] = {
+            'user_id': user_id,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        # Store in session
+        session['user_id'] = user_id
+        
+        # Send success message to opener window
+        user_data = {
+            'id': user_id,
+            'email': email,
+            'name': name,
+            'picture': picture,
+            'provider': 'google'
+        }
+        
+        import json
+        user_json = json.dumps(user_data).replace("'", "\\'")
+        
+        return f'''
+        <html><body>
+        <script>
+            window.opener.postMessage({{
+                type: 'oauth_success',
+                token: '{auth_token}',
+                user: {user_json}
+            }}, '*');
+            window.close();
+        </script>
+        </body></html>
+        '''
+        
+    except Exception as e:
+        print(f"[AUTH] Google OAuth error: {str(e)}")
+        return f'''
+        <html><body>
+        <script>
+            window.opener.postMessage({{ type: 'oauth_error', error: 'Authentication failed' }}, '*');
+            window.close();
+        </script>
+        </body></html>
+        '''
+
+
+@app.route('/v1/auth/google/status', methods=['GET'])
+def google_auth_status():
+    """Check if Google OAuth is configured"""
+    return jsonify({
+        "configured": bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET),
+        "client_id": GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None
+    })
+
 
 @app.route('/v1/auth/session', methods=['POST'])
 def create_session():

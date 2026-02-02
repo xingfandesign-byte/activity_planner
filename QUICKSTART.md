@@ -54,6 +54,29 @@ GOOGLE_PLACES_API_KEY=your-api-key-here
 
 **Note:** The app works without an API key using mock data for development.
 
+### Google OAuth (Sign in with Google)
+
+To enable "Sign in with Google":
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Navigate to **APIs & Services > Credentials**
+3. Click **Create Credentials > OAuth client ID**
+4. Select **Web application**
+5. Add authorized JavaScript origins:
+   - `http://localhost:8000` (development)
+   - Your production domain
+6. Add authorized redirect URIs:
+   - `http://localhost:5001/v1/auth/google/callback`
+7. Copy the **Client ID** and **Client Secret**
+8. Set environment variables:
+
+```bash
+export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export GOOGLE_CLIENT_SECRET="your-client-secret"
+```
+
+**Note:** The app works without OAuth using email/password authentication.
+
 ## First Time Setup
 
 1. **Complete Onboarding**:
@@ -83,11 +106,14 @@ GOOGLE_PLACES_API_KEY=your-api-key-here
 ✅ Calendar event creation (Google Calendar links)
 ✅ Feedback system (like, save, already been)
 ✅ Responsive web UI
+✅ Google Places API integration (real location data)
+✅ Google OAuth authentication (Sign in with Google)
+✅ Email/password authentication
+✅ AI-powered personalized recommendations
 
 ## Next Steps for Production
 
-- Integrate Google OAuth for authentication
-- Connect to Google Places API for real location data
 - Implement email notifications for Friday digests
 - Add database persistence (currently in-memory)
 - Calendar history parsing for automatic deduplication
+- Add Apple Sign-In support

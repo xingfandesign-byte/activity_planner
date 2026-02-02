@@ -342,8 +342,8 @@ async function handleLogin() {
 async function loginWithEmail(email, password) {
     try {
         const response = await fetch(`${API_BASE}/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
         });
         
@@ -470,10 +470,101 @@ function continueAsGuest() {
     showOnboarding();
 }
 
-function signInWithOAuth(provider) {
-    // In production, redirect to OAuth provider
-    alert(`OAuth with ${provider} - Demo mode: signing in...`);
-    simulateLogin(`user@${provider}.com`);
+async function signInWithOAuth(provider) {
+    if (provider === 'google') {
+        try {
+            // Check if Google OAuth is configured
+            const statusResponse = await fetch(`${API_BASE}/auth/google/status`);
+            const statusData = await statusResponse.json();
+            
+            if (!statusData.configured) {
+                // Fall back to demo mode if not configured
+                alert('Google OAuth not configured. Using demo mode.');
+                simulateLogin('demo@google.com');
+                return;
+            }
+            
+            // Get the Google auth URL
+            const urlResponse = await fetch(`${API_BASE}/auth/google/url`);
+            const urlData = await urlResponse.json();
+            
+            if (urlData.url) {
+                // Open Google OAuth in a popup
+                const width = 500;
+                const height = 600;
+                const left = (window.innerWidth - width) / 2 + window.screenX;
+                const top = (window.innerHeight - height) / 2 + window.screenY;
+                
+                const popup = window.open(
+                    urlData.url,
+                    'Google Sign In',
+                    `width=${width},height=${height},left=${left},top=${top},popup=yes`
+                );
+                
+                // Listen for message from popup
+                window.addEventListener('message', function handleOAuthMessage(event) {
+                    if (event.data.type === 'oauth_success') {
+                        // Store auth token and user info
+                        authToken = event.data.token;
+                        currentUser = event.data.user;
+                        localStorage.setItem('auth_token', authToken);
+                        localStorage.setItem('user_id', currentUser.id);
+                        localStorage.setItem('user_email', currentUser.email);
+                        localStorage.setItem('user_name', currentUser.name || '');
+                        localStorage.setItem('user_picture', currentUser.picture || '');
+                        localStorage.setItem('auth_provider', 'google');
+                        
+                        console.log('[Auth] Google sign-in successful:', currentUser.email);
+                        
+                        // Check if user has preferences
+                        checkUserPreferencesAndRedirect();
+                        
+                        window.removeEventListener('message', handleOAuthMessage);
+                    } else if (event.data.type === 'oauth_error') {
+                        console.error('[Auth] Google sign-in error:', event.data.error);
+                        alert('Sign-in failed: ' + event.data.error);
+                        window.removeEventListener('message', handleOAuthMessage);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('[Auth] Google OAuth error:', error);
+            alert('Failed to sign in with Google. Please try again.');
+        }
+    } else if (provider === 'apple') {
+        // Apple Sign-In not implemented yet
+        alert('Apple Sign-In coming soon! Please use Google or email.');
+    }
+}
+
+async function checkUserPreferencesAndRedirect() {
+    try {
+        const response = await fetch(`${API_BASE}/user/preferences`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.preferences && Object.keys(data.preferences).length > 0) {
+                // User has preferences, go to dashboard
+                console.log('[Auth] User has saved preferences, going to dashboard');
+                Object.assign(onboardingData, data.preferences);
+                showDashboard();
+            } else {
+                // New user, start onboarding
+                console.log('[Auth] New user, starting onboarding');
+                showOnboarding();
+            }
+        } else {
+            // No preferences, start onboarding
+            showOnboarding();
+        }
+    } catch (error) {
+        console.error('[Auth] Error checking preferences:', error);
+        showOnboarding();
+    }
 }
 
 function handleSignOut() {
@@ -1325,24 +1416,24 @@ async function loadDigest() {
             renderDigestItems(data.items);
         } else {
             if (itemsContainer) {
-                itemsContainer.innerHTML = `
-                    <div style="text-align: center; padding: 2rem; color: #666;">
-                        <p><strong>No recommendations available</strong></p>
+            itemsContainer.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: #666;">
+                    <p><strong>No recommendations available</strong></p>
                         <button class="btn btn-primary" onclick="loadDigest()" style="width: auto; margin-top: 1rem;">Retry</button>
-                    </div>
-                `;
+                </div>
+            `;
             }
         }
     } catch (error) {
         console.error('Error loading digest:', error);
         if (itemsContainer) {
-            itemsContainer.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: #ef4444;">
-                    <p><strong>Error loading recommendations</strong></p>
-                    <p style="font-size: 0.85rem; margin-top: 1rem; color: #666;">Make sure the backend server is running on port 5001</p>
+        itemsContainer.innerHTML = `
+            <div style="text-align: center; padding: 2rem; color: #ef4444;">
+                <p><strong>Error loading recommendations</strong></p>
+                <p style="font-size: 0.85rem; margin-top: 1rem; color: #666;">Make sure the backend server is running on port 5001</p>
                     <button class="btn btn-primary" onclick="loadDigest()" style="width: auto; margin-top: 1rem;">Retry</button>
-                </div>
-            `;
+            </div>
+        `;
         }
     } finally {
         if (loading) loading.style.display = 'none';
@@ -1484,7 +1575,7 @@ async function addToCalendar(recId) {
     const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${formatDate(start)}/${formatDate(end)}&details=${encodeURIComponent(item.explanation)}&location=${encodeURIComponent(item.address || '')}`;
     
     window.open(url, '_blank');
-    document.getElementById('detail-modal').classList.remove('active');
+        document.getElementById('detail-modal').classList.remove('active');
 }
 
 async function handleFeedback(recId, action, event) {
@@ -1497,10 +1588,10 @@ async function handleFeedback(recId, action, event) {
         
         if (event?.target) {
             const btn = event.target;
-            if (action === 'like') {
+        if (action === 'like') {
                 btn.textContent = '👍✓';
                 setTimeout(() => { btn.textContent = '👍'; }, 2000);
-            } else if (action === 'save') {
+        } else if (action === 'save') {
                 btn.textContent = '⭐✓';
                 setTimeout(() => { btn.textContent = '⭐'; }, 2000);
             }

@@ -21,9 +21,9 @@
             <div class="container auth-container">
                 <!-- Login Form -->
                 <div id="login-form" class="auth-form active">
-                    <h1>🎉 Weekend Planner</h1>
+                <h1>🎉 Weekend Planner</h1>
                     <p class="subtitle">Welcome back!</p>
-                    
+                
                     <div class="form-group">
                         <label>Email</label>
                         <input type="email" id="login-email" placeholder="hello@example.com">
@@ -449,7 +449,7 @@
                 <header class="dashboard-header">
                     <h1>Weekend Planner</h1>
                     <div class="header-actions">
-                        <button id="settings-btn" class="btn btn-secondary" onclick="openSettings()">⚙️ Settings</button>
+                        <button id="settings-btn" class="btn btn-secondary" onclick="openSettings()">Settings</button>
                         <button id="signout-btn" class="btn btn-secondary" onclick="handleSignOut()">Sign Out</button>
                     </div>
                 </header>
@@ -461,7 +461,7 @@
                 
                 <!-- Quick Adjustments - Now at the top -->
                 <div class="quick-adjustments">
-                    <h3>🎯 Quick Adjustments for This Weekend</h3>
+                    <h3>Quick Adjustments for This Weekend</h3>
                     <p class="quick-adjustments-note">These are temporary - your saved preferences won't change</p>
                     
                     <div class="quick-row">
@@ -500,7 +500,7 @@
                 <div class="dashboard-recommendations">
                     <div class="section-header">
                         <h3>🎉 This Weekend's Recommendations</h3>
-                        <button class="btn-link" onclick="refreshRecommendations()">↻ Refresh</button>
+                        <button class="btn-link" onclick="refreshRecommendations()"><span class="refresh-icon">↻</span> Refresh</button>
                     </div>
                     <div id="dashboard-digest-items" class="digest-grid">
                         <div class="loading" id="dashboard-loading">Loading recommendations...</div>
@@ -513,7 +513,7 @@
         <div id="settings-modal" class="modal">
             <div class="modal-content modal-large">
                 <span class="close" onclick="closeSettings()">&times;</span>
-                <h2>⚙️ Settings</h2>
+                <h2>Settings</h2>
                 
                 <div class="settings-tabs">
                     <button class="settings-tab active" onclick="showSettingsTab('preferences')">Saved Preferences</button>
@@ -735,6 +735,15 @@
                 </div>
                 
                 <button class="btn btn-primary" onclick="signupFromPrompt()">Create Free Account</button>
+                
+                <div class="auth-divider">
+                    <span>or</span>
+                </div>
+                
+                <button class="btn btn-oauth btn-oauth-full" onclick="signInWithOAuth('google'); closeSignupPrompt();">
+                    <span class="oauth-icon">G</span> Continue with Google
+                </button>
+                
                 <button class="btn-link" onclick="skipSignupAndContinue()">Skip for now — show me recommendations</button>
             </div>
         </div>

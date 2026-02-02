@@ -161,10 +161,17 @@ h3 {
 .form-group select {
     width: 100%;
     padding: 0.875rem;
+    padding-right: 2.5rem;
     border: 2px solid #e0e0e0;
     border-radius: 8px;
     font-size: 1rem;
     transition: border-color 0.3s;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
 }
 
 .form-group input:focus,
@@ -284,6 +291,11 @@ h3 {
 .btn-oauth:hover {
     border-color: #667eea;
     background: #f8f9ff;
+}
+
+.btn-oauth-full {
+    width: 100%;
+    flex: none;
 }
 
 .oauth-icon {
@@ -634,6 +646,20 @@ h3 {
     padding: 0.5rem;
     margin-top: 1rem;
     display: block;
+}
+
+.section-header .btn-link {
+    font-size: 1rem;
+    margin-top: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.refresh-icon {
+    font-size: 1.25rem;
+    line-height: 1;
     width: 100%;
     text-align: center;
 }
@@ -921,12 +947,12 @@ h3 {
 }
 
 .quick-adjustments h3 {
-    color: #92400e;
+    color: #555555;
     margin-bottom: 0.25rem;
 }
 
 .quick-adjustments-note {
-    color: #a16207;
+    color: #555555;
     font-size: 0.85rem;
     margin-bottom: 1rem;
 }
@@ -983,6 +1009,7 @@ h3 {
 
 .section-header h3 {
     margin: 0;
+    white-space: nowrap;
 }
 
 /* Settings Modal */
@@ -1191,16 +1218,22 @@ header {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+    align-items: stretch;
 }
 
 .card-actions .btn {
     padding: 0.5rem 1rem;
     font-size: 0.9rem;
+    margin-top: 0;
+    width: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.traffic-light { color: #10b981; }
-.traffic-moderate { color: #f59e0b; }
-.traffic-heavy { color: #ef4444; }
+.traffic-light { color: #666666; }
+.traffic-moderate { color: #666666; }
+.traffic-heavy { color: #666666; }
 
 /* ==================== MODALS ==================== */
 
