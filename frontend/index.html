@@ -161,6 +161,7 @@
                         </button>
                         
                         <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
+                        <button class="btn-link" onclick="goToStep(1)">← Back</button>
                     </div>
                     
                     <div id="step-2b" class="substep">
@@ -209,6 +210,7 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
+                        <button class="btn-link" onclick="goBackFromLocationConfirm()">← Back</button>
                     </div>
                     
                     <div id="step-2d" class="substep">
@@ -289,6 +291,7 @@
                         </div>
                         
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
+                        <button class="btn-link" onclick="showSubstep('2c')">← Back</button>
                     </div>
                 </div>
 

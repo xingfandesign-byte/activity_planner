@@ -636,6 +636,17 @@ function completeLocationStep() {
     showSubstep('2d');
 }
 
+function goBackFromLocationConfirm() {
+    // Go back based on how user entered location
+    if (onboardingData.home_location?.type === 'geolocation') {
+        showSubstep('2a');
+    } else {
+        showSubstep('2b');
+    }
+    // Clear the location so user can re-enter
+    onboardingData.home_location = null;
+}
+
 // Preference updates
 function updateTransportationPrefs() {
     const selected = document.querySelectorAll('#step-2d .selection-card.selectable.selected[data-value="walking"], #step-2d .selection-card.selectable.selected[data-value="transit"], #step-2d .selection-card.selectable.selected[data-value="car"]');
@@ -1312,6 +1323,7 @@ window.goToStep = goToStep;
 window.showSubstep = showSubstep;
 window.submitLocation = submitLocation;
 window.completeLocationStep = completeLocationStep;
+window.goBackFromLocationConfirm = goBackFromLocationConfirm;
 window.completeOnboarding = completeOnboarding;
 window.skipAndComplete = skipAndComplete;
 window.showDashboard = showDashboard;
