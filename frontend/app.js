@@ -688,6 +688,23 @@ function completeLocationStep() {
     showSubstep('2d');
 }
 
+function handleSaveLocationCheckbox(checkbox) {
+    if (!checkbox.checked) return;
+    
+    const existingLocation = localStorage.getItem('weekend_planner_location');
+    
+    if (existingLocation) {
+        const parsed = JSON.parse(existingLocation);
+        const confirmed = confirm(
+            `Home location is already set to "${parsed.formatted_address || parsed.input}".\n\nDo you want to update to this new location?`
+        );
+        
+        if (!confirmed) {
+            checkbox.checked = false;
+        }
+    }
+}
+
 function goBackFromLocationConfirm() {
     // Go back based on how user entered location
     if (onboardingData.home_location?.type === 'geolocation') {
@@ -1377,6 +1394,7 @@ window.goBack = goBack;
 window.submitLocation = submitLocation;
 window.completeLocationStep = completeLocationStep;
 window.goBackFromLocationConfirm = goBackFromLocationConfirm;
+window.handleSaveLocationCheckbox = handleSaveLocationCheckbox;
 window.completeOnboarding = completeOnboarding;
 window.skipAndComplete = skipAndComplete;
 window.showDashboard = showDashboard;
