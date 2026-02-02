@@ -3,3 +3,6 @@
 
 # But keep .gitignore itself
 !.gitignore
+
+# SQLite database (local data)
+backend/weekend_planner.db

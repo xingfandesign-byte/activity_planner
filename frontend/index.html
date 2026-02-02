@@ -19,6 +19,7 @@
         <!-- Auth Screen (Login/Signup) - Only for returning users who need to sign in -->
         <div id="auth-screen" class="screen">
             <div class="container auth-container">
+                <p id="verify-email-message" class="verify-email-message" style="display:none;"></p>
                 <!-- Login Form -->
                 <div id="login-form" class="auth-form active">
                 <h1>🎉 Weekend Planner</h1>
@@ -31,7 +32,13 @@
                     
                     <div class="form-group">
                         <label>Password</label>
-                        <input type="password" id="login-password" placeholder="Enter your password">
+                        <div class="password-input-wrapper">
+                            <input type="password" id="login-password" placeholder="Enter your password">
+                            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('login-password', this)" title="Show password" aria-label="Show password">
+                                <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                        </div>
                     </div>
                     
                     <div class="checkbox-row">
@@ -58,7 +65,9 @@
                         Don't have an account? <a href="#" onclick="showSignupForm()">Sign up</a>
                     </p>
                     
-                    <button class="btn-link" onclick="continueAsGuest()">Continue as guest</button>
+                    <p class="auth-switch">
+                        <a href="#" onclick="continueAsGuest()">Continue as guest</a>
+                    </p>
                 </div>
                 
                 <!-- Signup Form -->
@@ -73,7 +82,13 @@
                     
                     <div class="form-group">
                         <label>Create a password</label>
-                        <input type="password" id="signup-password" placeholder="At least 8 characters">
+                        <div class="password-input-wrapper">
+                            <input type="password" id="signup-password" placeholder="At least 8 characters">
+                            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('signup-password', this)" title="Show password" aria-label="Show password">
+                                <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                        </div>
                         <p class="input-hint">✓ At least 8 characters</p>
                     </div>
                     
@@ -104,6 +119,57 @@
                         By continuing, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
                     </p>
                 </div>
+                
+                <!-- Reset Password Form (shown when URL has ?reset_token=...) -->
+                <div id="reset-password-form" class="auth-form">
+                    <h1>Set new password</h1>
+                    <p class="subtitle">Enter your new password below</p>
+                    <input type="hidden" id="reset-token-input" value="">
+                    <div class="form-group">
+                        <label>New password</label>
+                        <div class="password-input-wrapper">
+                            <input type="password" id="reset-new-password" placeholder="At least 8 characters">
+                            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('reset-new-password', this)" title="Show password" aria-label="Show password">
+                                <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Confirm password</label>
+                        <div class="password-input-wrapper">
+                            <input type="password" id="reset-confirm-password" placeholder="Confirm your password">
+                            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('reset-confirm-password', this)" title="Show password" aria-label="Show password">
+                                <svg class="icon-eye" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                <svg class="icon-eye-off" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <p id="reset-error" class="form-error" style="display:none;"></p>
+                    <button class="btn btn-primary" onclick="handleResetPassword()">Update password</button>
+                    <p class="auth-switch">
+                        <a href="#" onclick="showLoginFormFromReset()">Back to sign in</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Forgot Password Modal -->
+        <div id="forgot-password-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeForgotPasswordModal()">&times;</span>
+                <h2>Reset password</h2>
+                <p class="forgot-subtitle">Enter your email and we'll send you a link to reset your password.</p>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="forgot-email" placeholder="hello@example.com">
+                </div>
+                <p id="forgot-message" class="forgot-message" style="display:none;"></p>
+                <p id="forgot-error" class="form-error" style="display:none;"></p>
+                <button class="btn btn-primary" onclick="handleForgotPassword()">Send reset link</button>
+                <p class="auth-switch" style="margin-top:1rem;">
+                    <a href="#" onclick="closeForgotPasswordModal(); return false;">Back to sign in</a>
+                </p>
             </div>
         </div>
 
@@ -432,7 +498,6 @@
                     </div>
                     
                     <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
-                    <button class="btn-link" onclick="skipAndComplete()">Skip & use defaults</button>
                 </div>
                 
                 <!-- Sign in / Sign up link for existing users -->
@@ -516,7 +581,9 @@
                 <h2>Settings</h2>
                 
                 <div class="settings-tabs">
-                    <button class="settings-tab active" onclick="showSettingsTab('preferences')">Saved Preferences</button>
+                    <button class="settings-tab active" onclick="showSettingsTab('preferences')">Preferences</button>
+                    <button class="settings-tab" onclick="showSettingsTab('saved')">Saved</button>
+                    <button class="settings-tab" onclick="showSettingsTab('been')">Been</button>
                     <button class="settings-tab" onclick="showSettingsTab('account')">Account</button>
                     <button class="settings-tab" onclick="showSettingsTab('notifications')">Notifications</button>
                 </div>
@@ -609,6 +676,38 @@
                     </div>
                     
                     <button class="btn btn-secondary" onclick="editAllPreferences()">Redo Full Onboarding</button>
+                </div>
+                
+                <!-- Saved Places Tab -->
+                <div id="settings-saved" class="settings-tab-content">
+                    <div class="list-header">
+                        <h3>⭐ Saved Places</h3>
+                        <p class="list-description">Places you've favorited for later</p>
+                    </div>
+                    <div id="saved-places-list" class="places-list">
+                        <div class="list-loading">Loading...</div>
+                    </div>
+                    <div id="saved-empty" class="list-empty" style="display: none;">
+                        <div class="empty-icon">⭐</div>
+                        <p>No saved places yet</p>
+                        <p class="empty-hint">Tap the star on any recommendation to save it here</p>
+                    </div>
+                </div>
+                
+                <!-- Been Places Tab -->
+                <div id="settings-been" class="settings-tab-content">
+                    <div class="list-header">
+                        <h3>✅ Places You've Been</h3>
+                        <p class="list-description">These won't appear in future recommendations</p>
+                    </div>
+                    <div id="been-places-list" class="places-list">
+                        <div class="list-loading">Loading...</div>
+                    </div>
+                    <div id="been-empty" class="list-empty" style="display: none;">
+                        <div class="empty-icon">✅</div>
+                        <p>No places marked as visited</p>
+                        <p class="empty-hint">Mark places you've already been to exclude them from recommendations</p>
+                    </div>
                 </div>
                 
                 <!-- Account Tab -->
@@ -744,7 +843,9 @@
                     <span class="oauth-icon">G</span> Continue with Google
                 </button>
                 
-                <button class="btn-link" onclick="skipSignupAndContinue()">Skip for now — show me recommendations</button>
+                <p class="auth-switch">
+                    <a href="#" onclick="skipSignupAndContinue()">Skip for now — show me recommendations</a>
+                </p>
             </div>
         </div>
     </div>

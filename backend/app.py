@@ -11,6 +11,9 @@ import os
 import requests
 import hashlib
 import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from functools import wraps
 
 
@@ -47,21 +50,27 @@ GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:50
 
 # Cache for API responses (simple in-memory cache)
 places_cache = {}
+# Cache for geocoding (ZIP/address -> lat,lng) to avoid repeated lookups
+geocode_cache = {}
 
-# In-memory storage (replace with database in production)
-users_db = {}
-preferences_db = {}
-visited_history_db = {}
-recent_recommendations_db = {}
-feedback_db = {}
+# Database persistence (backend/db.py uses SQLite)
+import db as _db
+db = _db
+db.init_db()
+
+# Local feeds (RSS, Facebook, Eventbrite) to complement Google Places
+try:
+    import local_feeds
+except ImportError:
+    local_feeds = None
 
 # Mock places data (replace with Places API in production)
 MOCK_PLACES = [
     {
-        "place_id": "p_001",
+        "place_id": "ChIJ51cu8IcfmogRW07iZizUBrE",
         "name": "Golden Gate Park",
         "category": "parks",
-        "address": "San Francisco, CA",
+        "address": "San Francisco, CA 94122",
         "lat": 37.7694,
         "lng": -122.4862,
         "distance_miles": 2.5,
@@ -69,41 +78,50 @@ MOCK_PLACES = [
         "price_flag": "free",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.8
+        "rating": 4.8,
+        "total_ratings": 45892,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a4/Golden_Gate_Park_1.jpg/1280px-Golden_Gate_Park_1.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Golden+Gate+Park/@37.7694208,-122.4862138,15z"
     },
     {
-        "place_id": "p_002",
+        "place_id": "ChIJNYvRwcKAhYARPJzfNJeTHvM",
         "name": "Exploratorium",
         "category": "museums",
-        "address": "Pier 15, San Francisco, CA",
+        "address": "Pier 15, The Embarcadero, San Francisco, CA 94111",
         "lat": 37.8014,
         "lng": -122.3976,
         "distance_miles": 5.2,
         "travel_time_min": 18,
-        "price_flag": "paid",
+        "price_flag": "$$",
         "kid_friendly": True,
         "indoor_outdoor": "indoor",
-        "rating": 4.7
+        "rating": 4.7,
+        "total_ratings": 12543,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c0/Exploratorium_2010.jpg/1280px-Exploratorium_2010.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Exploratorium/@37.8016519,-122.3990694,17z"
     },
     {
-        "place_id": "p_003",
+        "place_id": "ChIJfzjKxsV_j4ARmeNKVsXLDlk",
         "name": "Alcatraz Island",
         "category": "attractions",
-        "address": "San Francisco Bay, CA",
+        "address": "San Francisco, CA 94133",
         "lat": 37.8267,
         "lng": -122.4230,
         "distance_miles": 3.8,
         "travel_time_min": 15,
-        "price_flag": "paid",
+        "price_flag": "$$",
         "kid_friendly": False,
         "indoor_outdoor": "outdoor",
-        "rating": 4.6
+        "rating": 4.7,
+        "total_ratings": 34521,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/Alcatraz_Island_as_seen_from_the_East.jpg/1280px-Alcatraz_Island_as_seen_from_the_East.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Alcatraz+Island/@37.8269775,-122.4229555,17z"
     },
     {
-        "place_id": "p_004",
+        "place_id": "ChIJEfkMgcCAhYARyE0sMEfQ1Zs",
         "name": "Lands End Trail",
         "category": "parks",
-        "address": "San Francisco, CA",
+        "address": "Lands End Trail, San Francisco, CA 94121",
         "lat": 37.7878,
         "lng": -122.5062,
         "distance_miles": 4.1,
@@ -111,27 +129,33 @@ MOCK_PLACES = [
         "price_flag": "free",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.9
+        "rating": 4.9,
+        "total_ratings": 8934,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Lands_End_%28San_Francisco%29_2020.jpg/1280px-Lands_End_%28San_Francisco%29_2020.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Lands+End/@37.7877636,-122.5063379,16z"
     },
     {
-        "place_id": "p_005",
+        "place_id": "ChIJddqAct-AhYARt4T4C1GGblI",
         "name": "California Academy of Sciences",
         "category": "museums",
-        "address": "Golden Gate Park, San Francisco, CA",
+        "address": "55 Music Concourse Dr, San Francisco, CA 94118",
         "lat": 37.7699,
         "lng": -122.4661,
         "distance_miles": 2.8,
         "travel_time_min": 11,
-        "price_flag": "paid",
+        "price_flag": "$$$",
         "kid_friendly": True,
         "indoor_outdoor": "indoor",
-        "rating": 4.8
+        "rating": 4.6,
+        "total_ratings": 21567,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/California_Academy_of_Sciences_2.jpg/1280px-California_Academy_of_Sciences_2.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/California+Academy+of+Sciences/@37.7699066,-122.4660944,17z"
     },
     {
-        "place_id": "p_006",
+        "place_id": "ChIJiQSq3jeAhYARdAv5PJxLQks",
         "name": "Fisherman's Wharf",
         "category": "attractions",
-        "address": "San Francisco, CA",
+        "address": "Beach St & The Embarcadero, San Francisco, CA 94133",
         "lat": 37.8080,
         "lng": -122.4177,
         "distance_miles": 5.5,
@@ -139,13 +163,16 @@ MOCK_PLACES = [
         "price_flag": "free",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.5
+        "rating": 4.5,
+        "total_ratings": 67823,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Fishermans_Wharf_Sign%2C_SF%2C_CA%2C_jjron_25.03.2012.jpg/1280px-Fishermans_Wharf_Sign%2C_SF%2C_CA%2C_jjron_25.03.2012.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Fisherman's+Wharf/@37.808,-122.4177,16z"
     },
     {
-        "place_id": "p_007",
+        "place_id": "ChIJSV0E3nKAhYARYIGT3rE-7j0",
         "name": "Twin Peaks",
         "category": "parks",
-        "address": "San Francisco, CA",
+        "address": "501 Twin Peaks Blvd, San Francisco, CA 94114",
         "lat": 37.7544,
         "lng": -122.4477,
         "distance_miles": 3.2,
@@ -153,27 +180,33 @@ MOCK_PLACES = [
         "price_flag": "free",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.7
+        "rating": 4.7,
+        "total_ratings": 15678,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4f/Sf_twinpeaks.jpg/1280px-Sf_twinpeaks.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Twin+Peaks/@37.7544,-122.4477,16z"
     },
     {
-        "place_id": "p_008",
+        "place_id": "ChIJU1Ysd32AhYARY0rBWTEnQIA",
         "name": "SFMOMA",
         "category": "museums",
-        "address": "151 3rd St, San Francisco, CA",
+        "address": "151 3rd St, San Francisco, CA 94103",
         "lat": 37.7857,
         "lng": -122.4011,
         "distance_miles": 4.8,
         "travel_time_min": 16,
-        "price_flag": "paid",
-        "kid_friendly": False,
+        "price_flag": "$$",
+        "kid_friendly": True,
         "indoor_outdoor": "indoor",
-        "rating": 4.6
+        "rating": 4.5,
+        "total_ratings": 18234,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/SFMOMA_2016.jpg/1280px-SFMOMA_2016.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/San+Francisco+Museum+of+Modern+Art/@37.7857107,-122.4010984,17z"
     },
     {
-        "place_id": "p_009",
+        "place_id": "ChIJWZaXYvaAhYAR3ztA1L1HzrI",
         "name": "Baker Beach",
         "category": "parks",
-        "address": "San Francisco, CA",
+        "address": "1504 Pershing Dr, San Francisco, CA 94129",
         "lat": 37.7936,
         "lng": -122.4833,
         "distance_miles": 3.9,
@@ -181,33 +214,33 @@ MOCK_PLACES = [
         "price_flag": "free",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.6
+        "rating": 4.7,
+        "total_ratings": 9876,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b6/Baker_Beach_panorama.jpg/1280px-Baker_Beach_panorama.jpg",
+        "google_maps_url": "https://www.google.com/maps/place/Baker+Beach/@37.7936364,-122.4833083,16z"
     },
     {
-        "place_id": "p_010",
+        "place_id": "ChIJLw5uvt-AhYARVDlQd2P40C4",
         "name": "Japanese Tea Garden",
         "category": "parks",
-        "address": "Golden Gate Park, San Francisco, CA",
+        "address": "75 Hagiwara Tea Garden Dr, San Francisco, CA 94118",
         "lat": 37.7702,
         "lng": -122.4701,
         "distance_miles": 2.6,
         "travel_time_min": 10,
-        "price_flag": "paid",
+        "price_flag": "$",
         "kid_friendly": True,
         "indoor_outdoor": "outdoor",
-        "rating": 4.7
+        "rating": 4.6,
+        "total_ratings": 11234,
+        "photo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Japanese_Tea_Garden_%28San_Francisco%29.JPG/1280px-Japanese_Tea_Garden_%28San_Francisco%29.JPG",
+        "google_maps_url": "https://www.google.com/maps/place/Japanese+Tea+Garden/@37.7701656,-122.4700706,17z"
     }
 ]
 
 def get_user_id_from_token(token):
     """Extract user ID from auth token"""
-    token_data = auth_tokens.get(token)
-    if token_data is None:
-        return None
-    # Handle both old format (string) and new format (dict)
-    if isinstance(token_data, dict):
-        return token_data.get('user_id')
-    return token_data  # Old format: token_data is the user_id string
+    return db.get_user_id_from_token(token)
 
 
 def get_user_id():
@@ -245,7 +278,7 @@ def require_auth(f):
 def get_preferences():
     """Get user preferences"""
     user_id = get_user_id()
-    prefs = preferences_db.get(user_id)
+    prefs = db.get_preferences(user_id)
     if not prefs:
         # Return defaults if no preferences set
         prefs = {
@@ -268,7 +301,7 @@ def update_preferences():
     user_id = get_user_id()
     data = request.json
     print(f"[DEBUG] Updating preferences for user {user_id}: {data}")
-    preferences_db[user_id] = data
+    db.set_preferences(user_id, data)
     print(f"[DEBUG] Preferences saved. Categories: {data.get('categories', [])}")
     return jsonify({"status": "updated", "preferences": data})
 
@@ -277,7 +310,7 @@ def update_preferences():
 def should_dedup(place_id, user_id, prefs):
     """Check if a place should be deduplicated"""
     # Check explicit "already been"
-    visited = visited_history_db.get(user_id, [])
+    visited = db.get_visited_list(user_id)
     for visit in visited:
         if visit['place_id'] == place_id:
             visited_at = datetime.fromisoformat(visit['visited_at'])
@@ -286,7 +319,7 @@ def should_dedup(place_id, user_id, prefs):
                 return True
     
     # Check recently recommended (last 4 weeks)
-    recent = recent_recommendations_db.get(user_id, [])
+    recent = db.get_recent_recommendations_list(user_id)
     four_weeks_ago = datetime.now() - timedelta(weeks=4)
     for rec in recent:
         if rec.get('place_id') == place_id:
@@ -296,44 +329,80 @@ def should_dedup(place_id, user_id, prefs):
     
     return False
 
-def filter_places(prefs, user_id):
-    """Filter and rank places based on preferences"""
+# Average speed (mph) for deriving max distance from max travel time
+AVG_SPEED_MPH = 25
+
+def get_max_travel_time(travel_time_ranges):
+    """Get max travel time in minutes from travel_time_ranges list"""
+    if not travel_time_ranges:
+        return 30  # default
+    
+    max_time = 0
+    for range_str in travel_time_ranges:
+        if range_str == '60+':
+            return 90  # Cap at 90 min for 60+
+        elif range_str == '30-60':
+            max_time = max(max_time, 60)
+        elif range_str == '15-30':
+            max_time = max(max_time, 30)
+        elif range_str == '0-15':
+            max_time = max(max_time, 15)
+    
+    return max_time if max_time > 0 else 30
+
+def get_max_radius_miles(travel_time_ranges):
+    """Get max distance in miles from travel_time_ranges (aligned with travel time).
+    Uses average speed so distance and time filters are consistent."""
+    max_min = get_max_travel_time(travel_time_ranges)
+    # distance = (minutes / 60) * speed_mph
+    return max(3, int((max_min / 60) * AVG_SPEED_MPH))
+
+def _place_with_distance_from_user(place, user_lat, user_lng):
+    """Return a copy of place with distance_miles and travel_time_min computed from user location."""
+    import copy
+    p = copy.deepcopy(place)
+    dist = calculate_distance(user_lat, user_lng, place['lat'], place['lng'])
+    p['distance_miles'] = round(dist, 1)
+    p['travel_time_min'] = estimate_travel_time_minutes(dist)
+    return p
+
+
+def filter_places(prefs, user_id, user_lat=None, user_lng=None):
+    """Filter and rank places based on preferences. If user_lat/lng are provided,
+    distance and travel_time are computed from the user's location (so they match ZIP/address)."""
     filtered = []
     categories = prefs.get('categories', [])
-    # If no categories specified, show all
     show_all_categories = len(categories) == 0
     
-    print(f"[DEBUG] Filtering places - categories: {categories}, show_all: {show_all_categories}")
-    print(f"[DEBUG] Total places to filter: {len(MOCK_PLACES)}")
+    travel_time_ranges = prefs.get('travel_time_ranges', ['15-30'])
+    max_travel_time = get_max_travel_time(travel_time_ranges)
+    radius_limit = get_max_radius_miles(travel_time_ranges)
+    
+    # If user location provided, we'll compute distance/time per place; else use mock values
+    use_user_location = user_lat is not None and user_lng is not None
+    
+    print(f"[DEBUG] Filtering places - categories: {categories}, user_location: {use_user_location}")
+    print(f"[DEBUG] Travel time ranges: {travel_time_ranges}, max_travel_time: {max_travel_time} min, max_radius: {radius_limit} mi")
     
     for place in MOCK_PLACES:
-        # Hard filters
-        if place['distance_miles'] > prefs.get('radius_miles', 10):
-            print(f"[DEBUG] Filtered out {place['name']}: distance {place['distance_miles']} > {prefs.get('radius_miles', 10)}")
-            continue
+        if use_user_location:
+            place = _place_with_distance_from_user(place, user_lat, user_lng)
         
-        # Category filter - only apply if categories are specified
+        if place['distance_miles'] > radius_limit:
+            continue
+        if place.get('travel_time_min', 0) > max_travel_time:
+            continue
         if not show_all_categories and place['category'] not in categories:
-            print(f"[DEBUG] Filtered out {place['name']}: category {place['category']} not in {categories}")
             continue
-        
-        # Kid-friendly filter - only apply if explicitly requested
         if prefs.get('kid_friendly') is True and not place.get('kid_friendly'):
-            print(f"[DEBUG] Filtered out {place['name']}: not kid-friendly")
             continue
-        
-        # Dedup check
         if should_dedup(place['place_id'], user_id, prefs):
-            print(f"[DEBUG] Filtered out {place['name']}: already visited/recommended")
             continue
         
         filtered.append(place)
-        print(f"[DEBUG] Included {place['name']} ({place['category']})")
     
-    # Sort by rating and distance
     filtered.sort(key=lambda x: (x['rating'], -x['distance_miles']), reverse=True)
     
-    # Diversity: max 2 per category
     result = []
     category_counts = {}
     for place in filtered:
@@ -344,12 +413,13 @@ def filter_places(prefs, user_id):
         if len(result) >= 8:
             break
     
-    # If no results and we have categories, try relaxing filters
     if len(result) == 0 and len(categories) > 0:
-        print(f"[DEBUG] No results with strict filters, trying relaxed filters...")
-        # Try without category filter
+        relaxed_max_time = int(max_travel_time * 1.5)
+        relaxed_radius = int(radius_limit * 1.5)
         for place in MOCK_PLACES:
-            if place['distance_miles'] > prefs.get('radius_miles', 10) * 1.5:  # Increase radius
+            if use_user_location:
+                place = _place_with_distance_from_user(place, user_lat, user_lng)
+            if place['distance_miles'] > relaxed_radius or place.get('travel_time_min', 0) > relaxed_max_time:
                 continue
             if prefs.get('kid_friendly') is True and not place.get('kid_friendly'):
                 continue
@@ -368,7 +438,7 @@ def filter_places(prefs, user_id):
 def get_digest():
     """Get weekend digest for current week"""
     user_id = get_user_id()
-    prefs = preferences_db.get(user_id, {})
+    prefs = db.get_preferences(user_id) or {}
     
     # Use defaults if no preferences set
     if not prefs:
@@ -393,14 +463,21 @@ def get_digest():
     now = datetime.now()
     week = f"{now.year}-{now.isocalendar()[1]:02d}"
     
-    # Filter and rank places
-    places = filter_places(prefs, user_id)
+    # Resolve user location so distance/time match their ZIP or address
+    home = prefs.get('home_location') or {}
+    user_lat, user_lng = resolve_user_location(home)
+    print(f"[DEBUG] User location: {home.get('formatted_address') or home.get('input')} -> ({user_lat}, {user_lng})")
+    
+    # Filter and rank places (distance/travel_time computed from user location)
+    places = filter_places(prefs, user_id, user_lat, user_lng)
     print(f"[DEBUG] Filtered places count: {len(places)}")
     
     # Format recommendations
     items = []
     for i, place in enumerate(places):
         rec_id = f"r_{user_id}_{week}_{i}"
+        google_maps_url = place.get('google_maps_url') or f"https://www.google.com/maps/search/?api=1&query={place['lat']},{place['lng']}"
+        
         items.append({
             "rec_id": rec_id,
             "type": "place",
@@ -413,20 +490,16 @@ def get_digest():
             "kid_friendly": place['kid_friendly'],
             "indoor_outdoor": place['indoor_outdoor'],
             "explanation": f"Because you like {place['category']} and it's {place['travel_time_min']} min away",
-            "source_url": f"https://maps.google.com/?q={place['lat']},{place['lng']}",
+            "source_url": google_maps_url,
+            "google_maps_url": google_maps_url,
             "address": place['address'],
-            "rating": place['rating']
+            "rating": place.get('rating', 4.0),
+            "total_ratings": place.get('total_ratings', 0),
+            "photo_url": place.get('photo_url')
         })
         
         # Track as recently recommended
-        if user_id not in recent_recommendations_db:
-            recent_recommendations_db[user_id] = []
-        recent_recommendations_db[user_id].append({
-            "place_id": place['place_id'],
-            "rec_id": rec_id,
-            "recommended_at": datetime.now().isoformat(),
-            "week": week
-        })
+        db.add_recent_recommendation(user_id, place['place_id'], rec_id, week)
     
     response_data = {
         "week": week,
@@ -563,6 +636,66 @@ def calculate_distance(lat1, lng1, lat2, lng2):
     return R * c
 
 
+def geocode_to_lat_lng(query):
+    """Resolve ZIP code or address to lat/lng using OpenStreetMap Nominatim (no API key)."""
+    query = (query or "").strip()
+    if not query:
+        return None
+    cache_key = query.lower()
+    if cache_key in geocode_cache:
+        return geocode_cache[cache_key]
+    try:
+        # Prefer US for ZIP codes (5 digits)
+        if query.isdigit() and len(query) == 5:
+            q = f"{query}, USA"
+        else:
+            q = f"{query}, USA" if query.isdigit() else query
+        url = "https://nominatim.openstreetmap.org/search"
+        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "WeekendPlanner/1.0"}, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if not data:
+            return None
+        lat = float(data[0]["lat"])
+        lng = float(data[0]["lon"])
+        geocode_cache[cache_key] = (lat, lng)
+        return (lat, lng)
+    except Exception as e:
+        print(f"[GEOCODE] Error for '{query}': {e}")
+        return None
+
+
+def resolve_user_location(location):
+    """
+    Get (lat, lng) from user's saved location (ZIP, address, or geolocation).
+    Prefer geocoding from address/ZIP when present so distance/travel time are correct.
+    Returns (lat, lng) or (37.7749, -122.4194) as fallback (SF).
+    """
+    if not location:
+        return (37.7749, -122.4194)
+    if isinstance(location, dict):
+        query = location.get("formatted_address") or location.get("input") or location.get("value") or ""
+        if query and str(query).strip():
+            coords = geocode_to_lat_lng(str(query).strip())
+            if coords:
+                return coords
+        if "lat" in location and "lng" in location:
+            return (float(location["lat"]), float(location["lng"]))
+    if isinstance(location, str):
+        coords = geocode_to_lat_lng(location)
+        if coords:
+            return coords
+    return (37.7749, -122.4194)
+
+
+def estimate_travel_time_minutes(distance_miles, avg_mph=25):
+    """Estimate travel time in minutes from distance (miles)."""
+    if distance_miles <= 0:
+        return 5
+    return max(5, int(round((distance_miles / avg_mph) * 60)))
+
+
 def convert_google_place_to_item(place, user_location, index):
     """Convert Google Places API result to our recommendation format"""
     
@@ -572,13 +705,11 @@ def convert_google_place_to_item(place, user_location, index):
     place_lat = location.get('lat', 0)
     place_lng = location.get('lng', 0)
     
-    # Calculate distance
+    # Calculate distance and travel time from user location (must have lat/lng)
     user_lat = user_location.get('lat', 37.7749)
     user_lng = user_location.get('lng', -122.4194)
     distance = calculate_distance(user_lat, user_lng, place_lat, place_lng)
-    
-    # Estimate travel time (rough: 2 min per mile for driving)
-    travel_time = max(5, int(distance * 2))
+    travel_time = estimate_travel_time_minutes(distance)
     
     # Get price level
     price_level = place.get('price_level', 1)
@@ -638,9 +769,14 @@ def convert_google_place_to_item(place, user_location, index):
 
 @app.route('/v1/places/search', methods=['POST'])
 def search_places():
-    """Search for places using Google Places API"""
+    """Search for places using Google Places API. Location can be {lat, lng} or {formatted_address/input} (geocoded)."""
     data = request.json
-    location = data.get('location', {'lat': 37.7749, 'lng': -122.4194})
+    raw_location = data.get('location', {'lat': 37.7749, 'lng': -122.4194})
+    if 'lat' in raw_location and 'lng' in raw_location:
+        location = {'lat': float(raw_location['lat']), 'lng': float(raw_location['lng'])}
+    else:
+        user_lat, user_lng = resolve_user_location(raw_location)
+        location = {'lat': user_lat, 'lng': user_lng}
     categories = data.get('categories', ['parks', 'museums', 'food'])
     radius = data.get('radius_meters', 10000)
     
@@ -663,37 +799,71 @@ def search_places():
     })
 
 
+# ========== LOCAL FEEDS (complement to Google Places) ==========
+
+@app.route('/v1/feeds/config', methods=['GET'])
+def get_feeds_config():
+    """Return which local feed sources are configured (no secrets)."""
+    if not local_feeds:
+        return jsonify({"enabled": False, "sources": []})
+    config = local_feeds.get_local_feed_config()
+    sources = []
+    for c in config["feed_configs"]:
+        sources.append({"type": "rss", "label": c.get("label") or c.get("url", "")[:50], "url": c.get("url", "")})
+    if config.get("facebook_token"):
+        sources.append({"type": "facebook", "label": "Facebook Local"})
+    if config.get("eventbrite_token"):
+        sources.append({"type": "eventbrite", "label": "Eventbrite"})
+    if config.get("manus_api_key"):
+        sources.append({"type": "manus", "label": "Manus (personalized local feed)"})
+    return jsonify({"enabled": True, "sources": sources})
+
+
 # ========== AI-POWERED RECOMMENDATIONS ==========
 
 @app.route('/v1/recommendations/ai', methods=['POST'])
 def get_ai_recommendations():
-    """Get AI-powered recommendations based on user profile"""
+    """Get Manus-powered recommendations based on user profile (Manus only)."""
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
-    use_google_places = data.get('use_google_places', True)
     
-    print(f"[AI] Received recommendation request")
+    # Get user_id for deduplication
+    user_id = get_user_id()
+    
+    print(f"[AI] Received recommendation request for user: {user_id}")
     print(f"[AI] User profile: {json.dumps(profile, indent=2)}")
     print(f"[AI] Prompt length: {len(prompt)} chars")
-    print(f"[AI] Use Google Places: {use_google_places}")
     
+    if not local_feeds:
+        return jsonify({"error": "Manus/local feeds module not available on server"}), 500
+
+    config = local_feeds.get_local_feed_config()
+    if not config.get("manus_api_key"):
+        return jsonify({"error": "MANUS_API_KEY is not configured on the backend"}), 400
+
     items = []
-    source = "mock_data"
-    
-    # Try Google Places API first if enabled and configured
-    if use_google_places and GOOGLE_PLACES_API_KEY:
-        print("[AI] Attempting to use Google Places API")
-        items = generate_recommendations_from_google_places(profile)
-        if items:
-            source = "google_places"
-            print(f"[AI] Got {len(items)} recommendations from Google Places")
-    
-    # Fall back to mock data if Google Places didn't work
-    if not items:
-        print("[AI] Using mock data for recommendations")
-        items = generate_personalized_recommendations(profile)
-        source = "mock_data"
+    source = "manus"
+    try:
+        user_lat, user_lng = resolve_user_location(profile.get("location"))
+        travel_times = profile.get("travel_time_ranges", ["15-30"])
+        max_travel = get_max_travel_time(travel_times)
+        max_radius_miles = get_max_radius_miles(travel_times)
+        week_str = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
+
+        # Manus-only: ask Manus to produce the full recommendation list
+        items = local_feeds.get_local_feed_recommendations(
+            profile, user_lat, user_lng,
+            geocode_fn=geocode_to_lat_lng,
+            max_items=5,
+            max_travel_min=max_travel,
+            max_radius_miles=max_radius_miles,
+            week_str=week_str,
+        )
+        print(f"[AI] Got {len(items)} recommendations from Manus/local feeds")
+    except Exception as e:
+        print(f"[AI] Manus/local feeds error: {e}")
+        return jsonify({"error": "Failed to generate recommendations from Manus"}), 500
     
     response_data = {
         "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
@@ -706,14 +876,23 @@ def get_ai_recommendations():
     return jsonify(response_data)
 
 
-def generate_recommendations_from_google_places(profile):
-    """Generate recommendations using Google Places API"""
+def generate_recommendations_from_google_places(profile, user_id=None):
+    """Generate recommendations using Google Places API.
+    User location (ZIP/address) is resolved to lat/lng so distance and travel_time match."""
     
-    location = profile.get('location', {})
+    raw_location = profile.get('location', {})
+    user_lat, user_lng = resolve_user_location(raw_location)
+    location = {'lat': user_lat, 'lng': user_lng}
     interests = profile.get('interests', [])
     travel_times = profile.get('travel_time_ranges', ['15-30'])
     kid_friendly = profile.get('kid_friendly', False)
     budget = profile.get('budget', 'moderate')
+    
+    # Get visited places for deduplication
+    visited_place_ids = set()
+    if user_id:
+        visited = db.get_visited_list(user_id)
+        visited_place_ids = {v['place_id'] for v in visited}
     
     # Map interests to Google Places categories
     interest_to_category = {
@@ -732,20 +911,11 @@ def generate_recommendations_from_google_places(profile):
     if not categories:
         categories = ['parks', 'museums', 'food']
     
-    # Determine search radius based on travel time
-    max_travel = 30
-    if '60+' in travel_times:
-        max_travel = 90
-    elif '30-60' in travel_times:
-        max_travel = 60
-    elif '15-30' in travel_times:
-        max_travel = 30
-    elif '0-15' in travel_times:
-        max_travel = 15
-    
-    # Convert travel time to approximate radius in meters (assuming ~30 mph average)
-    radius_meters = int(max_travel * 0.5 * 1609)  # half of max travel time at 30mph, converted to meters
-    radius_meters = min(radius_meters, 50000)  # Max 50km radius
+    # Use shared helpers so travel time and distance are aligned
+    max_travel = get_max_travel_time(travel_times)
+    max_radius_miles = get_max_radius_miles(travel_times)
+    # Convert to meters for Places API (1 mile ≈ 1609 m)
+    radius_meters = min(int(max_radius_miles * 1609), 50000)  # Max 50km
     
     all_places = []
     
@@ -762,6 +932,10 @@ def generate_recommendations_from_google_places(profile):
                 
                 # Budget filter
                 if budget == 'free' and item.get('price_flag') != 'free':
+                    continue
+                
+                # Travel time and distance filter (aligned with user selection)
+                if item.get('travel_time_min', 0) > max_travel or item.get('distance_miles', 0) > max_radius_miles:
                     continue
                 
                 # Add personalized explanation
@@ -807,11 +981,13 @@ def generate_explanation_for_google_place(place, profile):
     return " — ".join(parts)
 
 
-def generate_personalized_recommendations(profile):
-    """Generate recommendations based on user profile"""
+def generate_personalized_recommendations(profile, user_id=None):
+    """Generate recommendations based on user profile. Distance and travel_time
+    are computed from the user's saved location (ZIP/address) so they match."""
     
-    # Extract profile data with defaults
     location = profile.get('location', {})
+    user_lat, user_lng = resolve_user_location(location)
+    
     group_type = profile.get('group_type', 'solo')
     interests = profile.get('interests', [])
     energy_level = profile.get('energy_level', 'moderate')
@@ -820,7 +996,11 @@ def generate_personalized_recommendations(profile):
     kid_friendly = profile.get('kid_friendly', False)
     avoid = profile.get('avoid', [])
     
-    # Map interests to categories
+    visited_place_ids = set()
+    if user_id:
+        visited = db.get_visited_list(user_id)
+        visited_place_ids = {v['place_id'] for v in visited}
+    
     interest_to_category = {
         'nature': 'parks',
         'arts_culture': 'museums',
@@ -837,73 +1017,62 @@ def generate_personalized_recommendations(profile):
     if not target_categories:
         target_categories = ['parks', 'museums', 'attractions']
     
-    # Get max travel time
-    max_travel = 30  # default
-    if '60+' in travel_times:
-        max_travel = 90
-    elif '30-60' in travel_times:
-        max_travel = 60
-    elif '15-30' in travel_times:
-        max_travel = 30
-    elif '0-15' in travel_times:
-        max_travel = 15
+    max_travel = get_max_travel_time(travel_times)
+    max_radius_miles = get_max_radius_miles(travel_times)
     
-    # Budget filter
     budget_filters = {
         'free': ['free'],
-        'low': ['free', 'paid'],
-        'moderate': ['free', 'paid'],
-        'any': ['free', 'paid']
+        'low': ['free', '$'],
+        'moderate': ['free', '$', '$$'],
+        'any': ['free', '$', '$$', '$$$', '$$$$', 'paid']
     }
-    allowed_prices = budget_filters.get(budget, ['free', 'paid'])
+    allowed_prices = budget_filters.get(budget, ['free', '$', '$$', '$$$'])
     
-    # Filter places based on profile
+    # Filter places: compute distance/time from user location for each place
     filtered_places = []
     for place in MOCK_PLACES:
-        # Category match
+        if place['place_id'] in visited_place_ids:
+            continue
         if place['category'] not in target_categories:
             continue
         
-        # Travel time filter
+        place = _place_with_distance_from_user(place, user_lat, user_lng)
+        
+        if place.get('distance_miles', 0) > max_radius_miles:
+            continue
         if place['travel_time_min'] > max_travel:
             continue
-        
-        # Budget filter
         if place['price_flag'] not in allowed_prices:
             continue
-        
-        # Kid-friendly filter
         if kid_friendly and not place.get('kid_friendly', False):
             continue
-        
-        # Avoid crowds filter
         if 'crowds' in avoid and place.get('crowded', False):
             continue
         
         filtered_places.append(place)
     
-    # Sort by relevance (matching interests first, then by travel time)
     def relevance_score(p):
         score = 0
-        # Interest match bonus
         if p['category'] in [interest_to_category.get(i) for i in interests]:
             score += 10
-        # Closer is better
         score -= p['travel_time_min'] / 10
-        # Rating bonus
         score += p.get('rating', 4) * 2
         return score
     
     filtered_places.sort(key=relevance_score, reverse=True)
     
-    # Take top 5
     top_places = filtered_places[:5]
     
-    # If not enough, add some fallbacks
     if len(top_places) < 5:
+        top_ids = {p['place_id'] for p in top_places}
         for place in MOCK_PLACES:
-            if place not in top_places:
-                top_places.append(place)
+            if place['place_id'] in visited_place_ids or place['place_id'] in top_ids:
+                continue
+            place = _place_with_distance_from_user(place, user_lat, user_lng)
+            if place.get('distance_miles', 0) > max_radius_miles or place['travel_time_min'] > max_travel:
+                continue
+            top_places.append(place)
+            top_ids.add(place['place_id'])
             if len(top_places) >= 5:
                 break
     
@@ -914,6 +1083,9 @@ def generate_personalized_recommendations(profile):
     
     for i, place in enumerate(top_places):
         explanation = generate_explanation(place, profile, interests)
+        
+        # Use Google Maps URL from mock data, or build from coordinates
+        google_maps_url = place.get('google_maps_url') or f"https://www.google.com/maps/search/?api=1&query={place['lat']},{place['lng']}"
         
         items.append({
             "rec_id": f"ai_{week}_{i}",
@@ -927,9 +1099,12 @@ def generate_personalized_recommendations(profile):
             "kid_friendly": place.get('kid_friendly', False),
             "indoor_outdoor": place.get('indoor_outdoor', 'outdoor'),
             "explanation": explanation,
-            "source_url": f"https://maps.google.com/?q={place['lat']},{place['lng']}",
+            "source_url": google_maps_url,
+            "google_maps_url": google_maps_url,
             "address": place['address'],
             "rating": place.get('rating', 4.0),
+            "total_ratings": place.get('total_ratings', 0),
+            "photo_url": place.get('photo_url'),
             "ai_matched": True
         })
     
@@ -1009,48 +1184,84 @@ def submit_feedback():
     data = request.json
     rec_id = data.get('rec_id')
     action = data.get('action')
+    place_id = data.get('place_id')
     
     if not rec_id or not action:
         return jsonify({"error": "Missing rec_id or action"}), 400
     
-    # Store feedback
-    if user_id not in feedback_db:
-        feedback_db[user_id] = []
-    feedback_db[user_id].append({
-        "rec_id": rec_id,
-        "action": action,
-        "created_at": datetime.now().isoformat(),
-        "metadata": data.get('metadata', {})
-    })
-    
-    # Handle "already_been" action
-    if action == "already_been":
-        # Find the place_id from the recommendation
-        week = data.get('metadata', {}).get('week', '')
-        for rec in recent_recommendations_db.get(user_id, []):
+    # Find place_id from recommendation if not provided
+    if not place_id:
+        for rec in db.get_recent_recommendations_list(user_id):
             if rec['rec_id'] == rec_id:
                 place_id = rec['place_id']
-                if user_id not in visited_history_db:
-                    visited_history_db[user_id] = []
-                visited_history_db[user_id].append({
-                    "place_id": place_id,
-                    "visited_at": datetime.now().isoformat(),
-                    "signal_type": "manual",
-                    "confidence": 1.0
-                })
                 break
     
-    return jsonify({"status": "recorded"})
+    # Handle "already_been" action - add to visited list
+    if action == "already_been" and place_id:
+        if not db.visited_contains(user_id, place_id):
+            db.add_visited(user_id, place_id, signal_type="manual", confidence=1.0)
+            print(f"[FEEDBACK] User {user_id} marked {place_id} as been")
+    
+    # Handle "unbeen" action - remove from visited list
+    elif action == "unbeen" and place_id:
+        db.remove_visited(user_id, place_id)
+        print(f"[FEEDBACK] User {user_id} unmarked {place_id} as been")
+    
+    # Handle "favorite" action - add to saved list
+    elif action == "favorite" and place_id:
+        if not db.saved_contains(user_id, place_id):
+            db.add_saved(user_id, place_id)
+            print(f"[FEEDBACK] User {user_id} saved {place_id}")
+    
+    # Handle "unsave" action - remove from saved list
+    elif action == "unsave" and place_id:
+        db.remove_saved(user_id, place_id)
+        print(f"[FEEDBACK] User {user_id} unsaved {place_id}")
+    
+    return jsonify({"status": "recorded", "action": action})
 
 # ========== VISITED HISTORY ==========
+
+def get_place_details_by_id(place_id):
+    """Helper to get place details from mock data by place_id"""
+    for place in MOCK_PLACES:
+        if place.get('place_id') == place_id:
+            return {
+                "place_id": place_id,
+                "title": place.get('name', 'Unknown Place'),
+                "category": place.get('category', 'general'),
+                "address": place.get('address', ''),
+                "photo_url": place.get('photo_url', ''),
+                "google_maps_url": place.get('google_maps_url', ''),
+                "rating": place.get('rating', 0),
+                "total_ratings": place.get('total_ratings', 0),
+                "price_level": place.get('price_level', 1)
+            }
+    # Return basic info if not found in mock data
+    return {
+        "place_id": place_id,
+        "title": place_id.replace('_', ' ').title(),
+        "category": "general"
+    }
 
 @app.route('/v1/visited', methods=['GET'])
 @require_auth
 def get_visited():
-    """Get visited places"""
+    """Get visited places with full details"""
     user_id = get_user_id()
-    visited = visited_history_db.get(user_id, [])
-    return jsonify({"visited": visited})
+    visited = db.get_visited_list(user_id)
+    
+    # Enrich with place details
+    enriched = []
+    for v in visited:
+        place_details = get_place_details_by_id(v['place_id'])
+        enriched.append({
+            **place_details,
+            "visited_at": v.get('visited_at'),
+            "signal_type": v.get('signal_type', 'manual')
+        })
+    
+    return jsonify({"visited": enriched})
 
 @app.route('/v1/visited', methods=['POST'])
 @require_auth
@@ -1063,16 +1274,12 @@ def add_visited():
     if not place_id:
         return jsonify({"error": "Missing place_id"}), 400
     
-    if user_id not in visited_history_db:
-        visited_history_db[user_id] = []
-    
-    visited_history_db[user_id].append({
-        "place_id": place_id,
-        "visited_at": data.get('visited_at', datetime.now().isoformat()),
-        "signal_type": data.get('signal_type', 'manual'),
-        "confidence": data.get('confidence', 1.0)
-    })
-    
+    db.add_visited(
+        user_id, place_id,
+        visited_at=data.get('visited_at', datetime.now().isoformat()),
+        signal_type=data.get('signal_type', 'manual'),
+        confidence=data.get('confidence', 1.0)
+    )
     return jsonify({"status": "added"})
 
 @app.route('/v1/visited/<place_id>', methods=['DELETE'])
@@ -1080,11 +1287,35 @@ def add_visited():
 def remove_visited(place_id):
     """Remove a visited place"""
     user_id = get_user_id()
-    if user_id in visited_history_db:
-        visited_history_db[user_id] = [
-            v for v in visited_history_db[user_id]
-            if v['place_id'] != place_id
-        ]
+    db.remove_visited(user_id, place_id)
+    return jsonify({"status": "removed"})
+
+# ========== SAVED PLACES ==========
+
+@app.route('/v1/saved', methods=['GET'])
+@require_auth
+def get_saved():
+    """Get saved/favorited places with full details"""
+    user_id = get_user_id()
+    saved = db.get_saved_list(user_id)
+    
+    # Enrich with place details
+    enriched = []
+    for s in saved:
+        place_details = get_place_details_by_id(s['place_id'])
+        enriched.append({
+            **place_details,
+            "saved_at": s.get('saved_at')
+        })
+    
+    return jsonify({"saved": enriched})
+
+@app.route('/v1/saved/<place_id>', methods=['DELETE'])
+@require_auth
+def remove_saved(place_id):
+    """Remove a saved place"""
+    user_id = get_user_id()
+    db.remove_saved(user_id, place_id)
     return jsonify({"status": "removed"})
 
 # ========== CALENDAR HELPERS ==========
@@ -1180,8 +1411,100 @@ def pause_notifications():
 
 # ========== AUTH ==========
 
-# Simple token storage (use proper JWT in production)
-auth_tokens = {}
+RESET_TOKEN_EXPIRY_HOURS = 1
+
+# Optional SMTP for password reset emails
+SMTP_HOST = os.environ.get('SMTP_HOST', '')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '') or os.environ.get('SMTP_PASS', '')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER or 'noreply@weekendplanner.local')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')  # e.g. https://app.example.com
+
+
+def send_password_reset_email(to_email, reset_link):
+    """Send password reset email via SMTP. Returns True on success, False otherwise."""
+    if not SMTP_HOST or not SMTP_USER:
+        print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
+        return False
+    subject = "Reset your Weekend Planner password"
+    text = f"""Hi,
+
+You requested a password reset for your Weekend Planner account.
+
+Click the link below to set a new password (valid for 1 hour):
+
+{reset_link}
+
+If you didn't request this, you can ignore this email.
+
+— Weekend Planner
+"""
+    html = f"""<p>Hi,</p>
+<p>You requested a password reset for your Weekend Planner account.</p>
+<p><a href="{reset_link}">Click here to set a new password</a> (valid for 1 hour).</p>
+<p>If you didn't request this, you can ignore this email.</p>
+<p>— Weekend Planner</p>"""
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_FROM
+        msg['To'] = to_email
+        msg.attach(MIMEText(text, 'plain'))
+        msg.attach(MIMEText(html, 'html'))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            if SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [to_email], msg.as_string())
+        print(f"[EMAIL] Password reset email sent to {to_email}")
+        return True
+    except Exception as e:
+        print(f"[EMAIL] Failed to send to {to_email}: {e}")
+        return False
+
+
+def send_verification_email(to_email, verify_link):
+    """Send email verification link via SMTP. Returns True on success."""
+    if not SMTP_HOST or not SMTP_USER:
+        print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
+        return False
+    subject = "Verify your Weekend Planner email"
+    text = f"""Hi,
+
+Thanks for signing up for Weekend Planner.
+
+Click the link below to verify your email (valid for 24 hours):
+
+{verify_link}
+
+If you didn't create an account, you can ignore this email.
+
+— Weekend Planner
+"""
+    html = f"""<p>Hi,</p>
+<p>Thanks for signing up for Weekend Planner.</p>
+<p><a href="{verify_link}">Click here to verify your email</a> (valid for 24 hours).</p>
+<p>If you didn't create an account, you can ignore this email.</p>
+<p>— Weekend Planner</p>"""
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_FROM
+        msg['To'] = to_email
+        msg.attach(MIMEText(text, 'plain'))
+        msg.attach(MIMEText(html, 'html'))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            if SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [to_email], msg.as_string())
+        print(f"[EMAIL] Verification email sent to {to_email}")
+        return True
+    except Exception as e:
+        print(f"[EMAIL] Failed to send verification to {to_email}: {e}")
+        return False
+
 
 @app.route('/v1/auth/signup', methods=['POST'])
 def signup():
@@ -1200,25 +1523,19 @@ def signup():
             return jsonify({"error": "Password must be at least 8 characters"}), 400
         
         # Check if user exists
-        if email in users_db:
+        if db.user_exists_by_identifier(email.lower()):
             return jsonify({"error": "User already exists"}), 409
         
         # Create user with hashed password
-        user_id = f"user_{len(users_db) + 1}_{datetime.now().timestamp()}"
-        users_db[email] = {
-            "user_id": user_id,
-            "email": email,
-            "password": hash_password(password),
-            "created_at": datetime.now().isoformat(),
-            "email_digest": data.get('email_digest', True)
-        }
+        user_id = f"user_{db.count_users() + 1}_{datetime.now().timestamp()}"
+        db.create_user_email(
+            email.lower(), user_id, hash_password(password),
+            email_digest=data.get('email_digest', True)
+        )
         
         # Create secure token
         token = secrets.token_urlsafe(32)
-        auth_tokens[token] = {
-            'user_id': user_id,
-            'created_at': datetime.now().isoformat()
-        }
+        db.set_auth_token(token, user_id)
         
         print(f"[AUTH] New user created: {email}")
         
@@ -1241,22 +1558,21 @@ def login():
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
     
-    # Check credentials
-    user = users_db.get(email)
-    if not user or not verify_password(password, user.get('password', '')):
+    # Check that account exists and password matches
+    user = db.get_user_by_identifier(email.lower())
+    if not user:
+        return jsonify({"error": "Invalid email or password"}), 401
+    if not verify_password(password, user.get('password', '')):
         return jsonify({"error": "Invalid email or password"}), 401
     
     user_id = user['user_id']
     
     # Create secure token
     token = secrets.token_urlsafe(32)
-    auth_tokens[token] = {
-        'user_id': user_id,
-        'created_at': datetime.now().isoformat()
-    }
+    db.set_auth_token(token, user_id)
     
     # Get preferences
-    prefs = preferences_db.get(user_id)
+    prefs = db.get_preferences(user_id)
     
     print(f"[AUTH] User logged in: {email}")
     
@@ -1264,9 +1580,158 @@ def login():
         "user_id": user_id,
         "email": email,
         "token": token,
+        "email_verified": user.get('email_verified', False),
         "preferences": prefs,
         "status": "authenticated"
     })
+
+
+@app.route('/v1/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    """Request a password reset link. Sends email if SMTP is configured; else returns token for dev."""
+    data = request.json
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({"error": "Email required"}), 400
+
+    reset_token = None
+    email_sent = False
+    if db.user_exists_by_email_for_reset(email):
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now() + timedelta(hours=RESET_TOKEN_EXPIRY_HOURS)
+        db.set_reset_token(token, email, expires_at)
+        reset_token = token
+        # Build reset link for email or for dev response
+        base = FRONTEND_URL or request.host_url.rstrip('/')
+        reset_link = f"{base}/index.html?reset_token={token}" if base else None
+        if reset_link and SMTP_HOST and SMTP_USER:
+            email_sent = send_password_reset_email(email, reset_link)
+        if not email_sent and reset_link:
+            print(f"[AUTH] Email not sent (SMTP not configured). Reset link: {reset_link[:50]}...")
+        print(f"[AUTH] Password reset requested for {email}, token expires {expires_at.isoformat()}")
+
+    payload = {
+        "message": "If an account exists with this email, you will receive a link to reset your password."
+    }
+    # Only return token in response when email was NOT sent (dev/testing)
+    if reset_token and not email_sent:
+        payload["reset_token"] = reset_token
+    return jsonify(payload)
+
+
+@app.route('/v1/auth/reset-password', methods=['POST'])
+def reset_password():
+    """Set new password using a valid reset token."""
+    data = request.json
+    token = (data.get('token') or '').strip()
+    new_password = data.get('new_password')
+
+    if not token:
+        return jsonify({"error": "Reset token required"}), 400
+    if not new_password or len(new_password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    record = db.get_reset_token(token)
+    if not record:
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+
+    try:
+        expires_at = datetime.fromisoformat(record["expires_at"])
+    except (ValueError, KeyError):
+        db.delete_reset_token(token)
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+
+    if datetime.now() > expires_at:
+        db.delete_reset_token(token)
+        return jsonify({"error": "Reset link has expired"}), 400
+
+    email = record["email"]
+    user = db.get_user_by_identifier(email)
+    if not user:
+        db.delete_reset_token(token)
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+
+    # Update password (user row: we need an update function)
+    db.update_user_password(email, hash_password(new_password))
+    db.delete_reset_token(token)
+    print(f"[AUTH] Password reset completed for {email}")
+    return jsonify({"message": "Password updated. You can sign in with your new password."})
+
+
+@app.route('/v1/auth/verify-email', methods=['POST'])
+def verify_email():
+    """Verify email using token from verification link."""
+    data = request.json
+    token = (data.get('token') or '').strip()
+    if not token:
+        return jsonify({"error": "Verification token required"}), 400
+
+    record = db.get_verification_token(token)
+    if not record:
+        return jsonify({"error": "Invalid or expired verification link"}), 400
+
+    try:
+        expires_at = datetime.fromisoformat(record["expires_at"])
+    except (ValueError, KeyError):
+        db.delete_verification_token(token)
+        return jsonify({"error": "Invalid or expired verification link"}), 400
+
+    if datetime.now() > expires_at:
+        db.delete_verification_token(token)
+        return jsonify({"error": "Verification link has expired"}), 400
+
+    email = record["email"]
+    user = db.get_user_by_identifier(email)
+    if not user:
+        db.delete_verification_token(token)
+        return jsonify({"error": "Account not found"}), 400
+
+    db.set_user_email_verified(email)
+    db.delete_verification_token(token)
+    print(f"[AUTH] Email verified for {email}")
+    return jsonify({"message": "Email verified. You can sign in with your account.", "email": email})
+
+
+@app.route('/v1/auth/resend-verification', methods=['POST'])
+def resend_verification():
+    """Send a new verification email. Body: { email } or use authenticated user's email."""
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        # Optional: use current user from Authorization header
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            t = auth_header[7:]
+            user_id = db.get_user_id_from_token(t)
+            if user_id:
+                user = db.get_user_by_user_id(user_id)
+                if user:
+                    email = (user.get('email') or user.get('identifier') or '').strip().lower()
+        if not email:
+            return jsonify({"error": "Email required"}), 400
+
+    user = db.get_user_by_identifier(email)
+    if not user:
+        return jsonify({"error": "No account found with this email"}), 404
+    if user.get('email_verified'):
+        return jsonify({"message": "Email is already verified"}), 200
+
+    verify_token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=getattr(db, 'VERIFICATION_TOKEN_EXPIRY_HOURS', 24))
+    db.set_verification_token(verify_token, email, expires_at)
+    base = FRONTEND_URL or request.host_url.rstrip('/')
+    verify_link = f"{base}/index.html?verify_token={verify_token}" if base else None
+    sent = False
+    if verify_link and SMTP_HOST and SMTP_USER:
+        sent = send_verification_email(email, verify_link)
+    if not sent and verify_link:
+        print(f"[AUTH] Resend verification: email not sent. Link: {verify_link[:50]}...")
+
+    payload = {"message": "If your account exists and is unverified, a new verification link was sent."}
+    if verify_token and not sent:
+        payload["verification_token"] = verify_token
+    return jsonify(payload)
+
 
 @app.route('/v1/auth/phone/request-otp', methods=['POST'])
 def request_phone_otp():
@@ -1296,27 +1761,20 @@ def verify_phone_otp():
         return jsonify({"error": "Invalid code"}), 401
     
     # Find or create user
-    is_new_user = phone not in users_db
+    is_new_user = not db.user_exists_by_identifier(phone)
     
     if is_new_user:
-        user_id = f"user_phone_{len(users_db) + 1}_{datetime.now().timestamp()}"
-        users_db[phone] = {
-            "user_id": user_id,
-            "phone": phone,
-            "created_at": datetime.now().isoformat()
-        }
+        user_id = f"user_phone_{db.count_users() + 1}_{datetime.now().timestamp()}"
+        db.create_user_phone(phone, user_id)
     else:
-        user_id = users_db[phone]['user_id']
+        user_id = db.get_user_by_identifier(phone)['user_id']
     
     # Create secure token
     token = secrets.token_urlsafe(32)
-    auth_tokens[token] = {
-        'user_id': user_id,
-        'created_at': datetime.now().isoformat()
-    }
+    db.set_auth_token(token, user_id)
     
     # Get preferences
-    prefs = preferences_db.get(user_id)
+    prefs = db.get_preferences(user_id)
     
     return jsonify({
         "user_id": user_id,
@@ -1332,8 +1790,8 @@ def logout():
     auth_header = request.headers.get('Authorization')
     if auth_header and auth_header.startswith('Bearer '):
         token = auth_header[7:]
-        if token in auth_tokens:
-            del auth_tokens[token]
+        if db.get_user_id_from_token(token):
+            db.delete_auth_token(token)
     
     session.clear()
     return jsonify({"status": "logged_out"})
@@ -1428,6 +1886,7 @@ def google_callback():
             '''
         
         access_token = tokens.get('access_token')
+        oauth_type = session.get('oauth_type', 'auth')
         
         # Get user info from Google
         userinfo_response = requests.get(
@@ -1445,35 +1904,34 @@ def google_callback():
         # Check if user exists, create if not
         user_id = f"google_{google_id}"
         
-        if user_id not in users_db:
-            users_db[user_id] = {
-                'id': user_id,
-                'email': email,
-                'name': name,
-                'picture': picture,
-                'provider': 'google',
-                'google_id': google_id,
-                'created_at': datetime.now().isoformat()
-            }
-            print(f"[AUTH] Created new Google user: {email}")
-        else:
-            # Update user info
-            users_db[user_id]['name'] = name
-            users_db[user_id]['picture'] = picture
-            print(f"[AUTH] Existing Google user logged in: {email}")
+        db.upsert_user_google(user_id, email, name=name, picture=picture)
+        print(f"[AUTH] Google user logged in: {email}")
         
         # Generate auth token
-        import secrets
         auth_token = secrets.token_urlsafe(32)
-        auth_tokens[auth_token] = {
-            'user_id': user_id,
-            'created_at': datetime.now().isoformat()
-        }
+        db.set_auth_token(auth_token, user_id)
         
         # Store in session
         session['user_id'] = user_id
         
-        # Send success message to opener window
+        # Check if this is a calendar auth request
+        if oauth_type == 'calendar':
+            # Return calendar-specific success with access token for calendar API
+            print(f"[AUTH] Calendar auth successful for: {email}")
+            return f'''
+            <html><body>
+            <script>
+                window.opener.postMessage({{
+                    type: 'calendar_auth_success',
+                    token: '{access_token}',
+                    auth_token: '{auth_token}'
+                }}, '*');
+                window.close();
+            </script>
+            </body></html>
+            '''
+        
+        # Send success message to opener window (normal auth)
         user_data = {
             'id': user_id,
             'email': email,
@@ -1482,7 +1940,6 @@ def google_callback():
             'provider': 'google'
         }
         
-        import json
         user_json = json.dumps(user_data).replace("'", "\\'")
         
         return f'''
@@ -1519,6 +1976,116 @@ def google_auth_status():
     })
 
 
+# ========== GOOGLE CALENDAR API ==========
+
+@app.route('/v1/auth/google/calendar/url', methods=['GET'])
+def get_google_calendar_auth_url():
+    """Get the Google OAuth URL with Calendar scope"""
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({"error": "Google OAuth not configured"}), 501
+    
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    session['oauth_type'] = 'calendar'
+    
+    # Include calendar scope
+    scopes = 'openid email profile https://www.googleapis.com/auth/calendar.events'
+    
+    params = {
+        'client_id': GOOGLE_CLIENT_ID,
+        'redirect_uri': GOOGLE_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': scopes,
+        'state': state,
+        'access_type': 'offline',
+        'prompt': 'consent'
+    }
+    
+    auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + '&'.join(f'{k}={requests.utils.quote(str(v))}' for k, v in params.items())
+    
+    return jsonify({
+        "url": auth_url,
+        "configured": True
+    })
+
+
+@app.route('/v1/calendar/event', methods=['POST'])
+def create_calendar_event():
+    """Create a Google Calendar event"""
+    data = request.json
+    calendar_token = data.get('calendar_token')
+    event_data = data.get('event', {})
+    
+    if not calendar_token:
+        return jsonify({"error": "No calendar token provided"}), 400
+    
+    try:
+        # Build event payload for Google Calendar API
+        event = {
+            'summary': event_data.get('title', 'Weekend Plan'),
+            'location': event_data.get('location', ''),
+            'description': event_data.get('description', ''),
+        }
+        
+        event_date = event_data.get('date')
+        
+        if event_data.get('isAllDay', True):
+            # All-day event
+            event['start'] = {'date': event_date}
+            event['end'] = {'date': event_date}
+        else:
+            # Timed event
+            start_time = event_data.get('startTime', '10:00')
+            end_time = event_data.get('endTime', '12:00')
+            event['start'] = {
+                'dateTime': f"{event_date}T{start_time}:00",
+                'timeZone': 'America/Los_Angeles'
+            }
+            event['end'] = {
+                'dateTime': f"{event_date}T{end_time}:00",
+                'timeZone': 'America/Los_Angeles'
+            }
+        
+        # Add reminder if requested
+        if event_data.get('reminder'):
+            event['reminders'] = {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'popup', 'minutes': event_data['reminder']}
+                ]
+            }
+        
+        # Call Google Calendar API
+        response = requests.post(
+            'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+            headers={
+                'Authorization': f'Bearer {calendar_token}',
+                'Content-Type': 'application/json'
+            },
+            json=event,
+            timeout=10
+        )
+        
+        if response.ok:
+            result = response.json()
+            print(f"[CALENDAR] Event created: {result.get('id')}")
+            return jsonify({
+                "status": "created",
+                "event_id": result.get('id'),
+                "event_link": result.get('htmlLink')
+            })
+        else:
+            error_data = response.json()
+            print(f"[CALENDAR] Error: {error_data}")
+            return jsonify({
+                "error": error_data.get('error', {}).get('message', 'Failed to create event')
+            }), response.status_code
+            
+    except Exception as e:
+        print(f"[CALENDAR] Exception: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/v1/auth/session', methods=['POST'])
 def create_session():
     """Create a demo session (replace with OAuth in production)"""
@@ -1548,18 +2115,18 @@ def get_user_preferences():
             return jsonify({"error": "Invalid token"}), 401
         
         # Get user info
+        user = db.get_user_by_user_id(user_id)
         user_info = None
-        for identifier, user in users_db.items():
-            if user.get('user_id') == user_id:
-                user_info = {
-                    "id": user_id,
-                    "email": user.get('email'),
-                    "phone": user.get('phone')
-                }
-                break
+        if user:
+            user_info = {
+                "id": user_id,
+                "email": user.get('email'),
+                "phone": user.get('phone'),
+                "email_verified": user.get('email_verified', False)
+            }
         
         # Get preferences
-        prefs = preferences_db.get(user_id, {})
+        prefs = db.get_preferences(user_id) or {}
         
         return jsonify({
             "user": user_info,
@@ -1567,6 +2134,16 @@ def get_user_preferences():
         })
     
     return jsonify({"error": "Authorization required"}), 401
+
+@app.route('/v1/debug/check-email', methods=['GET'])
+def debug_check_email():
+    """Dev only: check if an email is registered (database)."""
+    email = (request.args.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({"error": "Query param 'email' required"}), 400
+    exists = db.user_exists_by_identifier(email)
+    return jsonify({"email": email, "exists": exists})
+
 
 @app.route('/health', methods=['GET'])
 def health_check():

@@ -33,6 +33,22 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initApp() {
+    const urlParams = new URLSearchParams(window.location.search);
+    // Check for email verification link (URL has ?verify_token=...)
+    const verifyToken = urlParams.get('verify_token');
+    if (verifyToken) {
+        showAuthScreen();
+        await handleVerifyEmailLink(verifyToken);
+        return;
+    }
+    // Check for password reset link (URL has ?reset_token=...)
+    const resetToken = urlParams.get('reset_token');
+    if (resetToken) {
+        showAuthScreen();
+        showResetPasswordForm(resetToken);
+        return;
+    }
+    
     // Check for existing session
     authToken = localStorage.getItem('auth_token');
     const userId = localStorage.getItem('user_id');
@@ -50,7 +66,9 @@ async function initApp() {
             if (response.ok) {
                 const data = await response.json();
                 currentUser = { id: userId, ...data.user };
-                
+                if (data.user && typeof data.user.email_verified === 'boolean') {
+                    currentUser.email_verified = data.user.email_verified;
+                }
                 if (data.preferences && Object.keys(data.preferences).length > 0) {
                     onboardingData = { ...onboardingData, ...data.preferences };
                     showDashboard();
@@ -153,17 +171,17 @@ function setupEventListeners() {
     
     // Quick toggle buttons on dashboard
     document.querySelectorAll('.quick-toggle').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const group = btn.parentElement;
-            // For single-select groups
-            if (btn.dataset.value === 'solo' || btn.dataset.value === 'couple' || 
-                btn.dataset.value === 'family' || btn.dataset.value === 'friends') {
-                group.querySelectorAll('.quick-toggle').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-            } else {
-                // Multi-select for travel time
-                btn.classList.toggle('active');
+        btn.addEventListener('click', (e) => {
+            const value = btn.dataset.value;
+            // Travel time toggles: only handle via onclick="toggleQuickTravelTime(this)" to avoid double-toggle
+            if (value === '0-15' || value === '15-30' || value === '30-60' || value === '60+') {
+                return;
             }
+            // Single-select for group (Planning for)
+            const group = btn.parentElement;
+            group.querySelectorAll('.quick-toggle').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            onQuickAdjustmentChange();
         });
     });
     
@@ -355,7 +373,7 @@ async function loginWithEmail(email, password) {
             localStorage.setItem('user_email', email);
             localStorage.setItem('auth_provider', 'email');
             authToken = data.token;
-            currentUser = { id: data.user_id, email };
+            currentUser = { id: data.user_id, email, email_verified: data.email_verified === true };
             
             console.log('[Auth] Login successful:', email);
             
@@ -366,7 +384,7 @@ async function loginWithEmail(email, password) {
                 showOnboarding();
             }
         } else {
-            // Show actual error from server
+            // Show actual error from server (account may not exist or wrong password)
             alert(data.error || 'Invalid email or password');
         }
     } catch (error) {
@@ -375,6 +393,67 @@ async function loginWithEmail(email, password) {
     }
 }
 
+async function handleVerifyEmailLink(token) {
+    const msgEl = document.getElementById('verify-email-message');
+    if (!msgEl) return;
+    msgEl.style.display = 'block';
+    msgEl.classList.remove('success', 'error');
+    msgEl.textContent = 'Verifying your email...';
+    try {
+        const response = await fetch(`${API_BASE}/auth/verify-email`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            msgEl.classList.add('success');
+            msgEl.textContent = data.message || 'Email verified. You can sign in with your account.';
+            window.history.replaceState({}, document.title, window.location.pathname || '/index.html');
+        } else {
+            msgEl.classList.add('error');
+            msgEl.textContent = data.error || 'Invalid or expired verification link.';
+        }
+    } catch (e) {
+        msgEl.classList.add('error');
+        msgEl.textContent = 'Unable to verify. Please try again or request a new link.';
+    }
+}
+
+function dismissVerifyBanner() {
+    localStorage.setItem('verify_banner_dismissed', '1');
+    const el = document.getElementById('verify-email-banner');
+    if (el) el.classList.add('hidden');
+}
+
+async function resendVerificationEmail() {
+    const email = localStorage.getItem('user_email') || currentUser?.email;
+    if (!email) {
+        alert('Email not found. Please sign in again.');
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/auth/resend-verification`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': authToken ? `Bearer ${authToken}` : '' },
+            body: JSON.stringify({ email })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            if (data.verification_token) {
+                const link = `${window.location.origin}${window.location.pathname || '/index.html'}?verify_token=${encodeURIComponent(data.verification_token)}`;
+                alert('Verification email sent (or use this link for testing): ' + link);
+            } else {
+                alert(data.message || 'If your account is unverified, a new verification link was sent to your email.');
+            }
+        } else {
+            alert(data.error || 'Could not send verification email.');
+        }
+    } catch (e) {
+        console.error('Resend verification error:', e);
+        alert('Unable to send. Please try again.');
+    }
+}
 
 async function handleSignup() {
     const email = document.getElementById('signup-email').value;
@@ -791,10 +870,9 @@ function submitLocation(type) {
     onboardingData.home_location = {
         type: type,
         input: input,
-        lat: 37.7749,
-        lng: -122.4194,
         formatted_address: input,
         precision: type === 'zip' ? 'approximate' : 'exact'
+        // lat/lng omitted so backend geocodes from address for correct distance/travel time
     };
     
     document.getElementById('location-display').textContent = `📍 ${input}`;
@@ -978,6 +1056,18 @@ function populateDashboard() {
     const userName = currentUser?.email?.split('@')[0] || 'there';
     document.getElementById('user-name').textContent = userName;
     
+    // Email verification banner (show only for email signup users who haven't verified)
+    const verifyBanner = document.getElementById('verify-email-banner');
+    if (verifyBanner) {
+        const showBanner = !currentUser?.isGuest && currentUser?.email &&
+            currentUser.email_verified === false && localStorage.getItem('auth_provider') === 'email';
+        if (showBanner && !localStorage.getItem('verify_banner_dismissed')) {
+            verifyBanner.classList.remove('hidden');
+        } else {
+            verifyBanner.classList.add('hidden');
+        }
+    }
+    
     // Location
     document.getElementById('pref-location').textContent = 
         onboardingData.home_location?.formatted_address || 'Not set';
@@ -1003,7 +1093,17 @@ function populateDashboard() {
     
     // Travel time
     document.getElementById('pref-travel-time').textContent = 
-        onboardingData.travel_time_ranges.join(', ').replace(/-/g, '-') + ' min' || 'Not set';
+        onboardingData.travel_time_ranges?.join(', ').replace(/-/g, '-') + ' min' || 'Not set';
+    
+    // Sync Quick Adjustments travel time toggles to match saved preferences
+    document.querySelectorAll('.travel-time-toggles .quick-toggle').forEach(btn => {
+        const value = btn.dataset.value;
+        if (onboardingData.travel_time_ranges?.includes(value)) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
     
     // Departure times
     const departures = [];
@@ -1189,9 +1289,8 @@ function savePreferenceEdit() {
                 onboardingData.home_location = {
                     type: 'manual',
                     input: locationInput,
-                    formatted_address: locationInput,
-                    lat: 37.7749,
-                    lng: -122.4194
+                    formatted_address: locationInput
+                    // omit lat/lng so backend geocodes from address for correct distance/travel time
                 };
             }
             break;
@@ -1234,6 +1333,13 @@ function showSettingsTab(tab) {
     
     document.querySelector(`.settings-tab[onclick*="${tab}"]`)?.classList.add('active');
     document.getElementById(`settings-${tab}`)?.classList.add('active');
+    
+    // Load data for specific tabs
+    if (tab === 'saved') {
+        loadSavedPlaces();
+    } else if (tab === 'been') {
+        loadBeenPlaces();
+    }
 }
 
 function populateSettings() {
@@ -1267,6 +1373,157 @@ function saveNotificationSettings() {
     alert('Notification preferences saved!');
 }
 
+async function loadSavedPlaces() {
+    const listEl = document.getElementById('saved-places-list');
+    const emptyEl = document.getElementById('saved-empty');
+    const authToken = localStorage.getItem('auth_token');
+    
+    if (!authToken) {
+        listEl.innerHTML = '<div class="list-auth-needed">Sign in to see your saved places</div>';
+        emptyEl.style.display = 'none';
+        return;
+    }
+    
+    listEl.innerHTML = '<div class="list-loading">Loading...</div>';
+    emptyEl.style.display = 'none';
+    
+    try {
+        const response = await fetch(`${API_BASE}/saved`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.saved && data.saved.length > 0) {
+                listEl.innerHTML = data.saved.map(place => createPlaceListItem(place, 'saved')).join('');
+            } else {
+                listEl.innerHTML = '';
+                emptyEl.style.display = 'block';
+            }
+        } else {
+            listEl.innerHTML = '<div class="list-error">Failed to load saved places</div>';
+        }
+    } catch (error) {
+        console.error('Error loading saved places:', error);
+        listEl.innerHTML = '<div class="list-error">Failed to load saved places</div>';
+    }
+}
+
+async function loadBeenPlaces() {
+    const listEl = document.getElementById('been-places-list');
+    const emptyEl = document.getElementById('been-empty');
+    const authToken = localStorage.getItem('auth_token');
+    
+    if (!authToken) {
+        listEl.innerHTML = '<div class="list-auth-needed">Sign in to see your visited places</div>';
+        emptyEl.style.display = 'none';
+        return;
+    }
+    
+    listEl.innerHTML = '<div class="list-loading">Loading...</div>';
+    emptyEl.style.display = 'none';
+    
+    try {
+        const response = await fetch(`${API_BASE}/visited`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.visited && data.visited.length > 0) {
+                listEl.innerHTML = data.visited.map(place => createPlaceListItem(place, 'been')).join('');
+            } else {
+                listEl.innerHTML = '';
+                emptyEl.style.display = 'block';
+            }
+        } else {
+            listEl.innerHTML = '<div class="list-error">Failed to load visited places</div>';
+        }
+    } catch (error) {
+        console.error('Error loading visited places:', error);
+        listEl.innerHTML = '<div class="list-error">Failed to load visited places</div>';
+    }
+}
+
+function createPlaceListItem(place, listType) {
+    const dateStr = listType === 'saved' 
+        ? (place.saved_at ? `Saved ${formatRelativeDate(place.saved_at)}` : '')
+        : (place.visited_at ? `Marked ${formatRelativeDate(place.visited_at)}` : '');
+    
+    const removeAction = listType === 'saved' ? 'removeSavedPlace' : 'removeBeenPlace';
+    
+    return `
+        <div class="place-list-item" data-place-id="${place.place_id}">
+            <div class="place-list-image">
+                ${place.photo_url 
+                    ? `<img src="${place.photo_url}" alt="${place.title}" onerror="this.parentElement.innerHTML='📍'">`
+                    : '<span class="place-list-icon">📍</span>'
+                }
+            </div>
+            <div class="place-list-info">
+                <div class="place-list-title">${place.title}</div>
+                <div class="place-list-meta">
+                    ${place.category ? `<span class="place-list-category">${place.category}</span>` : ''}
+                    ${place.rating ? `<span class="place-list-rating">⭐ ${place.rating}</span>` : ''}
+                </div>
+                ${dateStr ? `<div class="place-list-date">${dateStr}</div>` : ''}
+            </div>
+            <button class="place-list-remove" onclick="${removeAction}('${place.place_id}')" title="Remove">×</button>
+        </div>
+    `;
+}
+
+function formatRelativeDate(isoDate) {
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) return 'today';
+    if (diffDays === 1) return 'yesterday';
+    if (diffDays < 7) return `${diffDays} days ago`;
+    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+    return date.toLocaleDateString();
+}
+
+async function removeSavedPlace(placeId) {
+    const authToken = localStorage.getItem('auth_token');
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/saved/${placeId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            // Reload the list
+            loadSavedPlaces();
+        }
+    } catch (error) {
+        console.error('Error removing saved place:', error);
+    }
+}
+
+async function removeBeenPlace(placeId) {
+    const authToken = localStorage.getItem('auth_token');
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/visited/${placeId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            // Reload the list
+            loadBeenPlaces();
+        }
+    } catch (error) {
+        console.error('Error removing visited place:', error);
+    }
+}
+
 // ==================== QUICK ADJUSTMENTS ====================
 
 function selectQuickGroup(btn) {
@@ -1291,11 +1548,20 @@ function onQuickAdjustmentChange() {
 
 // ==================== RECOMMENDATIONS ====================
 
+// Align with backend: max radius (miles) derived from max travel time at ~25 mph avg
 function getRadiusFromTravelTime() {
-    if (onboardingData.travel_time_ranges?.includes('60+')) return 50;
-    if (onboardingData.travel_time_ranges?.includes('30-60')) return 30;
-    if (onboardingData.travel_time_ranges?.includes('15-30')) return 15;
-    return 10;
+    const maxMin = getMaxTravelTimeMinutes();
+    return Math.max(3, Math.round((maxMin / 60) * 25));
+}
+
+function getMaxTravelTimeMinutes() {
+    const r = onboardingData.travel_time_ranges;
+    if (!r?.length) return 30;
+    if (r.includes('60+')) return 90;
+    if (r.includes('30-60')) return 60;
+    if (r.includes('15-30')) return 30;
+    if (r.includes('0-15')) return 15;
+    return 30;
 }
 
 // Build recommendation prompt from user profile
@@ -1463,17 +1729,20 @@ function renderDigestItems(items) {
 function createRecommendationCard(item) {
     const card = document.createElement('div');
     card.className = 'recommendation-card';
+    card.style.cursor = 'pointer';
     
     const trafficClass = item.travel_time_min < 15 ? 'traffic-light' : 
                          item.travel_time_min < 30 ? 'traffic-moderate' : 'traffic-heavy';
     const trafficLabel = item.travel_time_min < 15 ? '🟢 Light' : 
                          item.travel_time_min < 30 ? '🟡 Moderate' : '🔴 Heavy';
     
+    const sourceBadge = item.feed_source ? `<span class="card-source">From ${item.feed_source}</span>` : '';
     card.innerHTML = `
         <div class="card-header">
             <div>
                 <div class="card-title">${item.title}</div>
                 <span class="card-category">${item.category}</span>
+                ${sourceBadge}
             </div>
         </div>
         <div class="card-info">
@@ -1484,11 +1753,16 @@ function createRecommendationCard(item) {
         </div>
         <div class="card-explanation">${item.explanation}</div>
         <div class="card-actions">
-            <button class="btn btn-primary" onclick="showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
-            <button class="btn btn-secondary" onclick="handleFeedback('${item.rec_id}', 'like', event)">👍</button>
-            <button class="btn btn-secondary" onclick="handleFeedback('${item.rec_id}', 'save', event)">⭐</button>
+            <button class="btn btn-primary" onclick="event.stopPropagation(); showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
+            <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'favorite', event)" title="Favorite">⭐</button>
+            <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'already_been', event)" title="Already been here">✅</button>
         </div>
     `;
+    
+    // Make entire card clickable
+    card.addEventListener('click', () => {
+        showDetail(item.rec_id);
+    });
     
     return card;
 }
@@ -1500,11 +1774,50 @@ async function showDetail(recId) {
     const modal = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
     
+    // Build Google Maps search URL - uses search query for accurate results
+    const searchQuery = `${item.title} ${item.address || ''}`.trim();
+    const googleMapsSearchUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchQuery)}`;
+    
+    // Get image URL - use photo from API or fallback to Unsplash
+    const imageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title);
+    const hasRealPhoto = !!item.photo_url;
+    
+    // Build rating display with link to Google reviews
+    const ratingDisplay = item.rating ? `
+        <a href="${googleMapsSearchUrl}" target="_blank" rel="noopener" class="detail-rating-link">
+            <div class="detail-rating">
+                <span class="rating-stars">${'★'.repeat(Math.round(item.rating))}${'☆'.repeat(5 - Math.round(item.rating))}</span>
+                <span class="rating-value">${item.rating}</span>
+                ${item.total_ratings ? `<span class="rating-count">(${item.total_ratings.toLocaleString()} reviews)</span>` : ''}
+                <span class="google-link-icon">↗</span>
+            </div>
+        </a>
+    ` : '';
+    
+    // Build description
+    const description = item.description || item.explanation || generatePlaceDescription(item);
+    
     content.innerHTML = `
+        <a href="${googleMapsSearchUrl}" target="_blank" rel="noopener" class="detail-image-link">
+            <div class="detail-image-container">
+                <img src="${imageUrl}" alt="${item.title}" class="detail-image" onerror="this.src='https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop'">
+                <div class="image-overlay">
+                    <span class="view-on-google">View on Google Maps ↗</span>
+                </div>
+            </div>
+        </a>
         <div class="detail-header">
             <h2 class="detail-title">${item.title}</h2>
-            <span class="card-category">${item.category}</span>
+            ${ratingDisplay}
         </div>
+        <div class="detail-description">
+            <p>${description}</p>
+        </div>
+        ${item.address ? `
+        <a href="${googleMapsSearchUrl}" target="_blank" rel="noopener" class="detail-address-link">
+            <div class="detail-address">📍 ${item.address} <span class="google-link-icon">↗</span></div>
+        </a>
+        ` : ''}
         <div class="detail-info">
             <div class="detail-info-item">
                 <div class="detail-info-label">Distance</div>
@@ -1522,9 +1835,17 @@ async function showDetail(recId) {
                 <div class="detail-info-label">Type</div>
                 <div class="detail-info-value">${item.indoor_outdoor}</div>
             </div>
+            ${item.kid_friendly ? `
+            <div class="detail-info-item">
+                <div class="detail-info-label">Family</div>
+                <div class="detail-info-value">👶 Kid-friendly</div>
+            </div>
+            ` : ''}
         </div>
+        ${item.best_time ? `<div class="detail-best-time">🕐 Best time to visit: ${item.best_time}</div>` : ''}
         <div class="time-slots">
             <h3>Add to Calendar</h3>
+            <p class="time-slots-hint">Select a time (optional - defaults to all day)</p>
             <div class="slot-buttons">
                 <button class="slot-btn" onclick="selectSlot('SAT_AM')">Saturday Morning</button>
                 <button class="slot-btn" onclick="selectSlot('SAT_PM')">Saturday Afternoon</button>
@@ -1533,7 +1854,7 @@ async function showDetail(recId) {
             </div>
         </div>
         <div style="margin-top: 1.5rem;">
-            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')" disabled>Add to Calendar</button>
+            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')">Add to Calendar</button>
         </div>
     `;
     
@@ -1541,68 +1862,467 @@ async function showDetail(recId) {
     window.selectedSlot = null;
 }
 
+function getPlaceImageUrl(category, title) {
+    // Curated Unsplash images by category
+    const categoryImages = {
+        'parks': [
+            'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=800&h=400&fit=crop'
+        ],
+        'museums': [
+            'https://images.unsplash.com/photo-1554907984-15263bfd63bd?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1566127444979-b3d2b654e3d7?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1518998053901-5348d3961a04?w=800&h=400&fit=crop'
+        ],
+        'food': [
+            'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=800&h=400&fit=crop'
+        ],
+        'attractions': [
+            'https://images.unsplash.com/photo-1499002238440-d264f8f8a8d5?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1533929736458-ca588d08c8be?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop'
+        ],
+        'entertainment': [
+            'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?w=800&h=400&fit=crop'
+        ],
+        'shopping': [
+            'https://images.unsplash.com/photo-1481437156560-3205f6a55735?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1555529669-e69e7aa0ba9a?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=800&h=400&fit=crop'
+        ]
+    };
+    
+    const images = categoryImages[category] || categoryImages['attractions'];
+    // Use title hash to consistently pick same image for same place
+    const hash = title.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    return images[hash % images.length];
+}
+
+function generatePlaceDescription(item) {
+    const descriptions = {
+        'parks': `Escape to nature at ${item.title}. This beautiful outdoor space offers a perfect retreat from the busy city life. Whether you're looking to take a leisurely stroll, have a picnic, or simply relax surrounded by greenery, this is the ideal spot for your weekend.`,
+        'museums': `Discover art, history, and culture at ${item.title}. This museum offers fascinating exhibits that will engage visitors of all ages. Plan to spend a few hours exploring the collections and learning something new.`,
+        'food': `Treat yourself to a delicious dining experience at ${item.title}. Known for its excellent cuisine and welcoming atmosphere, this spot is perfect for a memorable meal with family or friends.`,
+        'attractions': `Experience the excitement of ${item.title}. This popular destination offers unique experiences and entertainment that make it a must-visit spot for your weekend adventure.`,
+        'entertainment': `Get ready for fun at ${item.title}! This entertainment venue promises an exciting time filled with memorable experiences. Perfect for creating lasting memories with your loved ones.`,
+        'shopping': `Explore the shops and boutiques at ${item.title}. From unique finds to popular brands, this destination offers a great shopping experience for everyone.`
+    };
+    
+    return descriptions[item.category] || `Visit ${item.title} for a wonderful weekend experience. ${item.explanation || ''}`;
+}
+
 function selectSlot(slot) {
-    document.querySelectorAll('.slot-btn').forEach(btn => btn.classList.remove('selected'));
-    event.target.classList.add('selected');
-    window.selectedSlot = slot;
-    document.getElementById('add-to-calendar-btn').disabled = false;
+    const btn = event.target;
+    
+    // Toggle selection - click again to deselect
+    if (btn.classList.contains('selected')) {
+        btn.classList.remove('selected');
+        window.selectedSlot = null;
+    } else {
+        document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        window.selectedSlot = slot;
+    }
 }
 
 async function addToCalendar(recId) {
-    if (!window.selectedSlot) {
-        alert('Please select a time slot');
-        return;
-    }
-    
     const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
     if (!item) return;
     
-    // Create Google Calendar URL
+    // Helper to format date as YYYY-MM-DD in local timezone
+    const formatLocalDate = (d) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    
+    // Calculate next Saturday and Sunday
+    const now = new Date();
+    const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
+    
+    // Days until next Saturday (if today is Sunday, next Sat is in 6 days)
+    // If today is Saturday (6), we use today; otherwise calculate days to Saturday
+    let daysUntilSaturday;
+    if (dayOfWeek === 6) {
+        daysUntilSaturday = 0; // Today is Saturday
+    } else if (dayOfWeek === 0) {
+        daysUntilSaturday = 6; // Today is Sunday, next Saturday is in 6 days
+    } else {
+        daysUntilSaturday = 6 - dayOfWeek; // Weekday: days until Saturday
+    }
+    
+    const saturday = new Date(now);
+    saturday.setDate(now.getDate() + daysUntilSaturday);
+    
+    const sunday = new Date(saturday);
+    sunday.setDate(saturday.getDate() + 1);
+    
+    let eventData = {
+        title: item.title,
+        location: item.address || '',
+        description: item.explanation || '',
+        isAllDay: true
+    };
+    
+    // Time slots: Morning = 9am-12pm, Afternoon = 2pm-6pm
+    if (window.selectedSlot) {
+        eventData.isAllDay = false;
+        
+        if (window.selectedSlot === 'SAT_AM') {
+            eventData.date = formatLocalDate(saturday);
+            eventData.startTime = '09:00';
+            eventData.endTime = '12:00';
+        } else if (window.selectedSlot === 'SAT_PM') {
+            eventData.date = formatLocalDate(saturday);
+            eventData.startTime = '14:00';
+            eventData.endTime = '18:00';
+        } else if (window.selectedSlot === 'SUN_AM') {
+            eventData.date = formatLocalDate(sunday);
+            eventData.startTime = '09:00';
+            eventData.endTime = '12:00';
+        } else if (window.selectedSlot === 'SUN_PM') {
+            eventData.date = formatLocalDate(sunday);
+            eventData.startTime = '14:00';
+            eventData.endTime = '18:00';
+        }
+    } else {
+        // No slot selected - default to all-day Saturday
+        eventData.date = formatLocalDate(saturday);
+    }
+    
+    // Open Google Calendar with the event data
+    addToCalendarManual(recId, eventData);
+}
+
+function showCalendarAuthPrompt(recId, item) {
+    const modal = document.getElementById('detail-modal');
+    const content = document.getElementById('detail-content');
+    
+    content.innerHTML = `
+        <div class="calendar-auth-prompt">
+            <h2>📅 Connect Google Calendar</h2>
+            <p>To add "${item.title}" to your calendar, please sign in with Google.</p>
+            
+            <div class="calendar-auth-benefits">
+                <div class="benefit-item">✓ Add events directly to your calendar</div>
+                <div class="benefit-item">✓ Set reminders automatically</div>
+                <div class="benefit-item">✓ Sync across all devices</div>
+            </div>
+            
+            <button class="btn btn-oauth btn-oauth-full" onclick="connectGoogleCalendar('${recId}')">
+                <span class="oauth-icon">G</span> Connect with Google
+            </button>
+            
+            <div class="auth-divider"><span>or</span></div>
+            
+            <button class="btn btn-secondary" onclick="addToCalendarManual('${recId}')" style="width: 100%;">
+                Open Google Calendar (manual)
+            </button>
+            
+            <p class="auth-switch" style="margin-top: 1rem;">
+                <a href="#" onclick="closeDetailModal(); return false;">Cancel</a>
+            </p>
+        </div>
+    `;
+}
+
+async function connectGoogleCalendar(recId) {
+    try {
+        // Get Google OAuth URL with calendar scope
+        const response = await fetch(`${API_BASE}/auth/google/calendar/url`);
+        const data = await response.json();
+        
+        if (data.url) {
+            // Store recId to continue after auth
+            sessionStorage.setItem('pending_calendar_recId', recId);
+            
+            // Open OAuth popup
+            const width = 500;
+            const height = 600;
+            const left = (window.innerWidth - width) / 2 + window.screenX;
+            const top = (window.innerHeight - height) / 2 + window.screenY;
+            
+            const popup = window.open(
+                data.url,
+                'Google Calendar Auth',
+                `width=${width},height=${height},left=${left},top=${top},popup=yes`
+            );
+            
+            // Listen for OAuth completion
+            window.addEventListener('message', function handleCalendarAuth(event) {
+                if (event.data.type === 'calendar_auth_success') {
+                    localStorage.setItem('google_calendar_token', event.data.token);
+                    localStorage.setItem('auth_provider', 'google');
+                    
+                    // Continue with calendar event
+                    const pendingRecId = sessionStorage.getItem('pending_calendar_recId');
+                    if (pendingRecId) {
+                        sessionStorage.removeItem('pending_calendar_recId');
+                        const item = window.currentDigest?.items?.find(i => i.rec_id === pendingRecId);
+                        if (item) {
+                            showCalendarEventModal(pendingRecId, item);
+                        }
+                    }
+                    
+                    window.removeEventListener('message', handleCalendarAuth);
+                } else if (event.data.type === 'oauth_error') {
+                    alert('Failed to connect Google Calendar: ' + event.data.error);
+                    window.removeEventListener('message', handleCalendarAuth);
+                }
+            });
+        } else {
+            // Fallback to manual add
+            addToCalendarManual(recId);
+        }
+    } catch (error) {
+        console.error('Calendar auth error:', error);
+        addToCalendarManual(recId);
+    }
+}
+
+function showCalendarEventModal(recId, item) {
+    const modal = document.getElementById('detail-modal');
+    const content = document.getElementById('detail-content');
+    
+    // Get next Saturday and Sunday
     const now = new Date();
     const saturday = new Date(now);
     saturday.setDate(now.getDate() + (6 - now.getDay()));
+    const sunday = new Date(saturday);
+    sunday.setDate(saturday.getDate() + 1);
     
-    let start, end;
-    if (window.selectedSlot === 'SAT_AM') {
-        start = new Date(saturday); start.setHours(10, 0, 0);
-        end = new Date(saturday); end.setHours(12, 0, 0);
-    } else if (window.selectedSlot === 'SAT_PM') {
-        start = new Date(saturday); start.setHours(14, 0, 0);
-        end = new Date(saturday); end.setHours(16, 0, 0);
-    } else if (window.selectedSlot === 'SUN_AM') {
-        const sunday = new Date(saturday); sunday.setDate(saturday.getDate() + 1);
-        start = new Date(sunday); start.setHours(10, 0, 0);
-        end = new Date(sunday); end.setHours(12, 0, 0);
-    } else {
-        const sunday = new Date(saturday); sunday.setDate(saturday.getDate() + 1);
-        start = new Date(sunday); start.setHours(14, 0, 0);
-        end = new Date(sunday); end.setHours(16, 0, 0);
+    const formatDateForInput = (d) => d.toISOString().split('T')[0];
+    
+    content.innerHTML = `
+        <div class="calendar-event-form">
+            <h2>📅 Add to Calendar</h2>
+            <h3>${item.title}</h3>
+            <p class="event-location">📍 ${item.address || 'Location not specified'}</p>
+            
+            <div class="form-group">
+                <label>Event Type</label>
+                <div class="event-type-toggle">
+                    <button class="event-type-btn active" onclick="selectEventType('day', this)" data-type="day">All Day Event</button>
+                    <button class="event-type-btn" onclick="selectEventType('timed', this)" data-type="timed">Specific Time</button>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Date</label>
+                <input type="date" id="event-date" value="${formatDateForInput(saturday)}" min="${formatDateForInput(now)}">
+            </div>
+            
+            <div id="time-fields" style="display: none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Start Time</label>
+                        <input type="time" id="event-start-time" value="10:00">
+                    </div>
+                    <div class="form-group">
+                        <label>End Time</label>
+                        <input type="time" id="event-end-time" value="12:00">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Add a note (optional)</label>
+                <textarea id="event-notes" placeholder="Any notes for this event...">${item.explanation || ''}</textarea>
+            </div>
+            
+            <div class="form-group">
+                <label><input type="checkbox" id="event-reminder" checked> Remind me 1 hour before</label>
+            </div>
+            
+            <div class="calendar-actions">
+                <button class="btn btn-primary" onclick="saveToGoogleCalendar('${recId}')">Save to Calendar</button>
+                <button class="btn btn-secondary" onclick="closeDetailModal()">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    window.currentEventType = 'day';
+}
+
+function selectEventType(type, btn) {
+    document.querySelectorAll('.event-type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    window.currentEventType = type;
+    
+    const timeFields = document.getElementById('time-fields');
+    timeFields.style.display = type === 'timed' ? 'block' : 'none';
+}
+
+async function saveToGoogleCalendar(recId) {
+    const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
+    if (!item) return;
+    
+    const eventDate = document.getElementById('event-date').value;
+    const eventNotes = document.getElementById('event-notes').value;
+    const addReminder = document.getElementById('event-reminder').checked;
+    
+    let eventData = {
+        title: item.title,
+        location: item.address || '',
+        description: eventNotes,
+        date: eventDate,
+        isAllDay: window.currentEventType === 'day',
+        reminder: addReminder ? 60 : null // 60 minutes before
+    };
+    
+    if (window.currentEventType === 'timed') {
+        eventData.startTime = document.getElementById('event-start-time').value;
+        eventData.endTime = document.getElementById('event-end-time').value;
     }
     
-    const formatDate = (d) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const calendarToken = localStorage.getItem('google_calendar_token');
     
-    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${formatDate(start)}/${formatDate(end)}&details=${encodeURIComponent(item.explanation)}&location=${encodeURIComponent(item.address || '')}`;
+    if (calendarToken) {
+        // Try to create event via API
+        try {
+            const response = await fetch(`${API_BASE}/calendar/event`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+                },
+                body: JSON.stringify({
+                    calendar_token: calendarToken,
+                    event: eventData
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                showCalendarSuccess(result.event_link);
+                return;
+            }
+        } catch (error) {
+            console.error('Calendar API error:', error);
+        }
+    }
+    
+    // Fallback to manual URL method
+    addToCalendarManual(recId, eventData);
+}
+
+function addToCalendarManual(recId, eventData = null) {
+    const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
+    if (!item) return;
+    
+    // Helper to format date as YYYYMMDD
+    const formatDateOnly = (dateStr) => dateStr.replace(/-/g, '');
+    
+    // Helper to format datetime as YYYYMMDDTHHMMSS (local time, no Z suffix)
+    const formatDateTime = (dateStr, timeStr) => {
+        return dateStr.replace(/-/g, '') + 'T' + timeStr.replace(/:/g, '') + '00';
+    };
+    
+    // Helper to format local date as YYYY-MM-DD
+    const formatLocalDate = (d) => {
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    
+    let url;
+    
+    if (eventData && eventData.isAllDay) {
+        // All-day event - use date only format
+        const date = formatDateOnly(eventData.date);
+        url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${date}/${date}&details=${encodeURIComponent(eventData.description || item.explanation)}&location=${encodeURIComponent(item.address || '')}`;
+    } else if (eventData && eventData.startTime) {
+        // Timed event - use local datetime format (no Z suffix)
+        const startDT = formatDateTime(eventData.date, eventData.startTime);
+        const endDT = formatDateTime(eventData.date, eventData.endTime);
+        url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${startDT}/${endDT}&details=${encodeURIComponent(eventData.description || item.explanation)}&location=${encodeURIComponent(item.address || '')}`;
+    } else {
+        // Default: next Saturday all-day
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        let daysUntilSaturday = (dayOfWeek === 6) ? 0 : (dayOfWeek === 0) ? 6 : (6 - dayOfWeek);
+        const saturday = new Date(now);
+        saturday.setDate(now.getDate() + daysUntilSaturday);
+        const date = formatDateOnly(formatLocalDate(saturday));
+        url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${date}/${date}&details=${encodeURIComponent(item.explanation)}&location=${encodeURIComponent(item.address || '')}`;
+    }
     
     window.open(url, '_blank');
-        document.getElementById('detail-modal').classList.remove('active');
+    closeDetailModal();
+}
+
+function showCalendarSuccess(eventLink) {
+    const content = document.getElementById('detail-content');
+    content.innerHTML = `
+        <div class="calendar-success">
+            <div class="success-icon">✅</div>
+            <h2>Added to Calendar!</h2>
+            <p>Your event has been saved to Google Calendar.</p>
+            ${eventLink ? `<a href="${eventLink}" target="_blank" class="btn btn-secondary">View in Calendar</a>` : ''}
+            <button class="btn btn-primary" onclick="closeDetailModal()" style="margin-top: 1rem;">Done</button>
+        </div>
+    `;
+}
+
+function closeDetailModal() {
+    document.getElementById('detail-modal').classList.remove('active');
 }
 
 async function handleFeedback(recId, action, event) {
+    // Find the place_id from current digest
+    const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
+    const placeId = item?.place_id;
+    
     try {
         await fetch(`${API_BASE}/feedback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ rec_id: recId, action })
+            body: JSON.stringify({ rec_id: recId, action, place_id: placeId })
         });
         
         if (event?.target) {
             const btn = event.target;
-        if (action === 'like') {
-                btn.textContent = '👍✓';
-                setTimeout(() => { btn.textContent = '👍'; }, 2000);
-        } else if (action === 'save') {
-                btn.textContent = '⭐✓';
-                setTimeout(() => { btn.textContent = '⭐'; }, 2000);
+            
+            // Toggle logic - check if already marked
+            if (action === 'favorite') {
+                if (btn.classList.contains('saved-marked')) {
+                    // Unsave
+                    btn.textContent = '⭐';
+                    btn.classList.remove('saved-marked');
+                    // Send unsave action
+                    fetch(`${API_BASE}/feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rec_id: recId, action: 'unsave', place_id: placeId })
+                    });
+                } else {
+                    // Save
+                    btn.textContent = '⭐ Saved';
+                    btn.classList.add('saved-marked');
+                }
+            } else if (action === 'already_been') {
+                if (btn.classList.contains('been-marked')) {
+                    // Unbeen
+                    btn.textContent = '✅';
+                    btn.classList.remove('been-marked');
+                    // Send unbeen action
+                    fetch(`${API_BASE}/feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rec_id: recId, action: 'unbeen', place_id: placeId })
+                    });
+                } else {
+                    // Mark as been
+                    btn.textContent = '✅ Been';
+                    btn.classList.add('been-marked');
+                }
             }
         }
     } catch (error) {
@@ -1617,6 +2337,8 @@ window.showSignupForm = showSignupForm;
 window.showAuthFromOnboarding = showAuthFromOnboarding;
 window.handleLogin = handleLogin;
 window.handleSignup = handleSignup;
+window.resendVerificationEmail = resendVerificationEmail;
+window.dismissVerifyBanner = dismissVerifyBanner;
 window.continueAsGuest = continueAsGuest;
 window.signInWithOAuth = signInWithOAuth;
 window.handleSignOut = handleSignOut;
@@ -1655,9 +2377,160 @@ window.loadDigest = loadDigest;
 window.showDetail = showDetail;
 window.selectSlot = selectSlot;
 window.addToCalendar = addToCalendar;
+window.connectGoogleCalendar = connectGoogleCalendar;
+window.addToCalendarManual = addToCalendarManual;
+window.selectEventType = selectEventType;
+window.saveToGoogleCalendar = saveToGoogleCalendar;
+window.closeDetailModal = closeDetailModal;
 window.handleFeedback = handleFeedback;
-window.showForgotPassword = () => alert('Password reset coming soon!');
+window.showForgotPassword = showForgotPassword;
+window.closeForgotPasswordModal = closeForgotPasswordModal;
+window.handleForgotPassword = handleForgotPassword;
+window.handleResetPassword = handleResetPassword;
+window.showLoginFormFromReset = showLoginFormFromReset;
+window.togglePasswordVisibility = togglePasswordVisibility;
 window.clearCache = clearCache;
+window.loadSavedPlaces = loadSavedPlaces;
+window.loadBeenPlaces = loadBeenPlaces;
+window.removeSavedPlace = removeSavedPlace;
+window.removeBeenPlace = removeBeenPlace;
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const eye = btn.querySelector('.icon-eye');
+    const eyeOff = btn.querySelector('.icon-eye-off');
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (eye) eye.style.display = 'none';
+        if (eyeOff) eyeOff.style.display = '';
+        btn.setAttribute('title', 'Hide password');
+        btn.setAttribute('aria-label', 'Hide password');
+    } else {
+        input.type = 'password';
+        if (eye) eye.style.display = '';
+        if (eyeOff) eyeOff.style.display = 'none';
+        btn.setAttribute('title', 'Show password');
+        btn.setAttribute('aria-label', 'Show password');
+    }
+}
+
+// ==================== PASSWORD RESET ====================
+
+function showForgotPassword() {
+    const modal = document.getElementById('forgot-password-modal');
+    const emailInput = document.getElementById('forgot-email');
+    const loginEmail = document.getElementById('login-email');
+    if (loginEmail && loginEmail.value) emailInput.value = loginEmail.value;
+    document.getElementById('forgot-message').style.display = 'none';
+    document.getElementById('forgot-error').style.display = 'none';
+    if (modal) modal.classList.add('active');
+}
+
+function closeForgotPasswordModal() {
+    const modal = document.getElementById('forgot-password-modal');
+    if (modal) modal.classList.remove('active');
+}
+
+async function handleForgotPassword() {
+    const email = document.getElementById('forgot-email').value.trim();
+    const msgEl = document.getElementById('forgot-message');
+    const errEl = document.getElementById('forgot-error');
+    msgEl.style.display = 'none';
+    errEl.style.display = 'none';
+    
+    if (!email) {
+        errEl.textContent = 'Please enter your email';
+        errEl.style.display = 'block';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await response.json().catch(() => ({}));
+        
+        if (response.ok) {
+            msgEl.innerHTML = data.message || "If an account exists with this email, you'll receive a link to reset your password.";
+            if (data.reset_token) {
+                const resetLink = `${window.location.origin}${window.location.pathname || '/index.html'}?reset_token=${encodeURIComponent(data.reset_token)}`;
+                msgEl.innerHTML += `<br><br><strong>For testing:</strong> <a href="${resetLink}">Open this link</a> to set a new password.`;
+            }
+            msgEl.style.display = 'block';
+            msgEl.style.color = '#059669';
+        } else {
+            errEl.textContent = data.error || 'Something went wrong. Please try again.';
+            errEl.style.display = 'block';
+        }
+    } catch (error) {
+        errEl.textContent = 'Unable to connect. Please try again.';
+        errEl.style.display = 'block';
+    }
+}
+
+function showResetPasswordForm(token) {
+    document.getElementById('login-form').classList.remove('active');
+    document.getElementById('signup-form').classList.remove('active');
+    document.getElementById('reset-password-form').classList.add('active');
+    document.getElementById('reset-token-input').value = token;
+    document.getElementById('reset-new-password').value = '';
+    document.getElementById('reset-confirm-password').value = '';
+    document.getElementById('reset-error').style.display = 'none';
+}
+
+function showLoginFormFromReset() {
+    document.getElementById('reset-password-form').classList.remove('active');
+    document.getElementById('login-form').classList.add('active');
+    document.getElementById('signup-form').classList.remove('active');
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+}
+
+async function handleResetPassword() {
+    const token = document.getElementById('reset-token-input').value.trim();
+    const newPassword = document.getElementById('reset-new-password').value;
+    const confirmPassword = document.getElementById('reset-confirm-password').value;
+    const errEl = document.getElementById('reset-error');
+    errEl.style.display = 'none';
+    
+    if (!token) {
+        errEl.textContent = 'Invalid or expired reset link. Request a new one.';
+        errEl.style.display = 'block';
+        return;
+    }
+    if (!newPassword || newPassword.length < 8) {
+        errEl.textContent = 'Password must be at least 8 characters.';
+        errEl.style.display = 'block';
+        return;
+    }
+    if (newPassword !== confirmPassword) {
+        errEl.textContent = 'Passwords do not match.';
+        errEl.style.display = 'block';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/auth/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, new_password: newPassword })
+        });
+        const data = await response.json().catch(() => ({}));
+        
+        if (response.ok) {
+            showLoginFormFromReset();
+            alert(data.message || 'Password updated. You can sign in with your new password.');
+        } else {
+            errEl.textContent = data.error || 'Something went wrong. Please try again.';
+            errEl.style.display = 'block';
+        }
+    } catch (error) {
+        errEl.textContent = 'Unable to connect. Please try again.';
+        errEl.style.display = 'block';
+    }
+}
 
 function clearCache() {
     localStorage.clear();

@@ -166,6 +166,48 @@ h3 {
     transition: border-color 0.3s;
 }
 
+/* Password field with show/hide toggle */
+.password-input-wrapper {
+    position: relative;
+}
+
+.password-input-wrapper input {
+    padding-right: 2.75rem;
+}
+
+.password-input-wrapper .password-toggle {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.password-input-wrapper .password-toggle:hover {
+    color: #667eea;
+    background: rgba(102, 126, 234, 0.08);
+}
+
+.password-input-wrapper .password-toggle:focus {
+    outline: none;
+}
+
+.password-input-wrapper .password-toggle .icon-eye,
+.password-input-wrapper .password-toggle .icon-eye-off {
+    pointer-events: none;
+}
+
 .form-group select {
     width: 100%;
     padding: 0.875rem;
@@ -254,6 +296,39 @@ h3 {
 
 .forgot-link:hover {
     text-decoration: underline;
+}
+
+.form-error {
+    color: #dc2626;
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.forgot-message {
+    color: #059669;
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.verify-email-message {
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    border-radius: 8px;
+}
+.verify-email-message.success {
+    color: #059669;
+    background: #ecfdf5;
+}
+.verify-email-message.error {
+    color: #dc2626;
+    background: #fef2f2;
+}
+
+.forgot-subtitle {
+    color: #666;
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
 }
 
 .auth-divider {
@@ -869,6 +944,39 @@ h3 {
     font-size: 1rem;
 }
 
+.verify-email-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    color: #92400e;
+}
+.verify-email-banner.hidden {
+    display: none;
+}
+.verify-email-banner span {
+    flex: 1;
+    font-size: 0.9rem;
+}
+.verify-email-banner .btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+}
+.verify-email-banner .banner-dismiss {
+    background: none;
+    border: none;
+    color: #92400e;
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    line-height: 1;
+}
+
 .preferences-summary {
     margin-bottom: 2rem;
 }
@@ -1027,21 +1135,23 @@ h3 {
 
 .settings-tabs {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.25rem;
     margin-bottom: 1.5rem;
     border-bottom: 2px solid #e5e7eb;
     padding-bottom: 0.5rem;
+    flex-wrap: wrap;
 }
 
 .settings-tab {
-    padding: 0.75rem 1.25rem;
+    padding: 0.6rem 0.9rem;
     border: none;
     background: none;
     cursor: pointer;
-    font-size: 1rem;
+    font-size: 0.9rem;
     color: #666;
     border-radius: 8px 8px 0 0;
     transition: all 0.2s;
+    white-space: nowrap;
 }
 
 .settings-tab:hover {
@@ -1061,6 +1171,156 @@ h3 {
 
 .settings-tab-content.active {
     display: block;
+}
+
+/* Places Lists (Saved & Been) */
+.list-header {
+    margin-bottom: 1rem;
+}
+
+.list-header h3 {
+    font-size: 1.25rem;
+    margin-bottom: 0.25rem;
+}
+
+.list-description {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.places-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.place-list-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: #f9fafb;
+    border-radius: 10px;
+    border: 1px solid #e5e7eb;
+    transition: all 0.2s;
+}
+
+.place-list-item:hover {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+}
+
+.place-list-image {
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.place-list-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.place-list-icon {
+    font-size: 1.5rem;
+}
+
+.place-list-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.place-list-title {
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.place-list-meta {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.place-list-category {
+    text-transform: capitalize;
+}
+
+.place-list-rating {
+    color: #f59e0b;
+}
+
+.place-list-date {
+    font-size: 0.8rem;
+    color: #999;
+    margin-top: 0.25rem;
+}
+
+.place-list-remove {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    color: #999;
+    font-size: 1.25rem;
+    cursor: pointer;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.place-list-remove:hover {
+    background: #fee2e2;
+    color: #ef4444;
+}
+
+.list-empty {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: #666;
+}
+
+.empty-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    opacity: 0.5;
+}
+
+.list-empty p {
+    margin-bottom: 0.5rem;
+}
+
+.empty-hint {
+    font-size: 0.9rem;
+    color: #999;
+}
+
+.list-loading,
+.list-error,
+.list-auth-needed {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
+}
+
+.list-error {
+    color: #ef4444;
 }
 
 .toggle-label {
@@ -1200,6 +1460,14 @@ header {
     font-weight: 500;
 }
 
+.card-source {
+    display: inline-block;
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    color: #666;
+    font-style: italic;
+}
+
 .card-info {
     display: flex;
     flex-wrap: wrap;
@@ -1237,6 +1505,13 @@ header {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.card-actions .btn.been-marked,
+.card-actions .btn.saved-marked {
+    background: #d1fae5;
+    border-color: #10b981;
+    color: #065f46;
 }
 
 .traffic-light { color: #666666; }
@@ -1302,14 +1577,137 @@ header {
     margin-top: 0;
 }
 
+.detail-image-link {
+    display: block;
+    text-decoration: none;
+}
+
+.detail-image-container {
+    margin: -1.5rem -1.5rem 1.5rem -1.5rem;
+    border-radius: 12px 12px 0 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.detail-image {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    transition: transform 0.3s;
+}
+
+.detail-image-link:hover .detail-image {
+    transform: scale(1.02);
+}
+
+.image-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    padding: 2rem 1rem 0.75rem;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.detail-image-link:hover .image-overlay {
+    opacity: 1;
+}
+
+.view-on-google {
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
 .detail-header {
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
 }
 
 .detail-title {
-    font-size: 2rem;
+    font-size: 1.75rem;
     color: #111;
     margin-bottom: 0.5rem;
+    line-height: 1.2;
+}
+
+.detail-rating-link {
+    text-decoration: none;
+    display: inline-block;
+}
+
+.detail-rating-link:hover .detail-rating {
+    background: #f5f5f5;
+}
+
+.detail-rating {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    margin-left: -0.5rem;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.rating-stars {
+    color: #f59e0b;
+    font-size: 1.1rem;
+}
+
+.rating-value {
+    font-weight: 600;
+    color: #333;
+}
+
+.rating-count {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.google-link-icon {
+    color: #667eea;
+    font-size: 0.85rem;
+    margin-left: 0.25rem;
+}
+
+.detail-description {
+    color: #444;
+    line-height: 1.6;
+    margin-bottom: 1rem;
+    font-size: 0.95rem;
+}
+
+.detail-address-link {
+    text-decoration: none;
+    display: block;
+}
+
+.detail-address {
+    color: #555;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: #f5f5f5;
+    border-radius: 8px;
+    transition: background 0.2s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.detail-address-link:hover .detail-address {
+    background: #eef;
+    color: #333;
+}
+
+.detail-best-time {
+    color: #555;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    padding: 0.5rem 0;
 }
 
 .detail-info {
@@ -1342,8 +1740,14 @@ header {
 }
 
 .time-slots h3 {
-    margin-bottom: 1rem;
+    margin-bottom: 0.25rem;
     color: #333;
+}
+
+.time-slots-hint {
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
 }
 
 .slot-buttons {
@@ -1371,6 +1775,123 @@ header {
     background: #667eea;
     color: white;
     border-color: #667eea;
+}
+
+/* ==================== CALENDAR EVENT FORM ==================== */
+
+.calendar-auth-prompt,
+.calendar-event-form,
+.calendar-success {
+    text-align: center;
+    padding: 1rem 0;
+}
+
+.calendar-auth-prompt h2,
+.calendar-event-form h2 {
+    margin-bottom: 0.5rem;
+}
+
+.calendar-auth-prompt p {
+    color: #666;
+    margin-bottom: 1.5rem;
+}
+
+.calendar-auth-benefits {
+    text-align: left;
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.calendar-auth-benefits .benefit-item {
+    padding: 0.5rem 0;
+    color: #333;
+}
+
+.calendar-event-form h3 {
+    margin-bottom: 0.25rem;
+    color: #333;
+}
+
+.calendar-event-form .event-location {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+}
+
+.calendar-event-form .form-group {
+    text-align: left;
+    margin-bottom: 1rem;
+}
+
+.calendar-event-form textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 0.75rem;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-family: inherit;
+    resize: vertical;
+}
+
+.event-type-toggle {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.event-type-btn {
+    flex: 1;
+    padding: 0.75rem;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    background: white;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.event-type-btn:hover {
+    border-color: #667eea;
+}
+
+.event-type-btn.active {
+    background: #667eea;
+    color: white;
+    border-color: #667eea;
+}
+
+.form-row {
+    display: flex;
+    gap: 1rem;
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.calendar-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+}
+
+.calendar-actions .btn {
+    flex: 1;
+}
+
+.calendar-success .success-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.calendar-success h2 {
+    color: #10b981;
+    margin-bottom: 0.5rem;
+}
+
+.calendar-success p {
+    color: #666;
+    margin-bottom: 1.5rem;
 }
 
 /* ==================== RESPONSIVE ==================== */

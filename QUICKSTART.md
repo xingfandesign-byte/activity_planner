@@ -37,6 +37,8 @@ Then open http://localhost:8000 in your browser.
 
 To get real location data instead of mock data, set up a Google Places API key:
 
+**Note:** Recommendations are currently **Manus-only**. The Google Places integration is no longer used by `/v1/recommendations/ai` unless you re-enable it in code.
+
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select existing
 3. Enable the **Places API**
@@ -77,6 +79,49 @@ export GOOGLE_CLIENT_SECRET="your-client-secret"
 
 **Note:** The app works without OAuth using email/password authentication.
 
+### Password reset email (SMTP)
+
+To send real password reset emails (instead of showing the reset link only in the app):
+
+1. **Gmail:** Use an [App Password](https://support.google.com/accounts/answer/185833) (not your normal password). Enable 2FA first, then create an app password for "Mail".
+2. **Other providers:** Use your provider’s SMTP host, port (usually 587), and credentials.
+
+Set these environment variables (or add to `.env`):
+
+```bash
+export SMTP_HOST="smtp.gmail.com"
+export SMTP_PORT="587"
+export SMTP_USER="your-email@gmail.com"
+export SMTP_PASSWORD="your-app-password"
+export EMAIL_FROM="Weekend Planner <your-email@gmail.com>"
+export FRONTEND_URL="http://localhost:8000"
+```
+
+- **SMTP_HOST** – e.g. `smtp.gmail.com`, `smtp.office365.com`
+- **SMTP_PORT** – usually `587` (TLS)
+- **SMTP_USER** / **SMTP_PASSWORD** – SMTP login (for Gmail, use an app password)
+- **EMAIL_FROM** – From address (and optional display name)
+- **FRONTEND_URL** – Base URL of the app (used in the reset link). Use your real URL in production.
+
+If SMTP is **not** set, the app still works: after "Forgot password?" the reset link is shown in the UI for testing.
+
+### Local feeds (RSS, Facebook, Eventbrite, Manus)
+
+Recommendations can be complemented with local events and news. Set any of:
+
+- **LOCAL_FEED_URLS** – Comma-separated RSS/Atom URLs (e.g. Axios, city event calendars). **LOCAL_FEED_LABELS** – Optional labels (same order).
+- **FACEBOOK_ACCESS_TOKEN** – Optional; Facebook Graph API token for events near the user.
+- **EVENTBRITE_TOKEN** – Optional; [Eventbrite API](https://www.eventbrite.com/platform/api) token.
+- **MANUS_API_KEY** – Optional; [Manus API](https://open.manus.ai/docs) key. User preferences are converted to a prompt and sent to Manus; the agent returns personalized local weekend recommendations (events, places, activities), which are merged with Google Places and other feeds.
+
+Example:
+
+```bash
+export MANUS_API_KEY="your-manus-api-key"
+```
+
+To see which sources are configured: `GET /v1/feeds/config` (returns enabled sources, no secrets).
+
 ## First Time Setup
 
 1. **Complete Onboarding**:
@@ -110,10 +155,12 @@ export GOOGLE_CLIENT_SECRET="your-client-secret"
 ✅ Google OAuth authentication (Sign in with Google)
 ✅ Email/password authentication
 ✅ AI-powered personalized recommendations
+✅ Database persistence (SQLite: users, preferences, saved/visited, auth)
+✅ Local feeds (RSS/Atom, Facebook Local, Eventbrite, Manus) to complement Google Places
+✅ Manus: user preference → prompt → personalized local feed (optional)
 
 ## Next Steps for Production
 
 - Implement email notifications for Friday digests
-- Add database persistence (currently in-memory)
 - Calendar history parsing for automatic deduplication
 - Add Apple Sign-In support
