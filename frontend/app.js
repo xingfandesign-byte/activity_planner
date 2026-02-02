@@ -5,7 +5,6 @@ const API_BASE = 'http://localhost:5001/v1';
 let currentUser = null;
 let authToken = null;
 let currentStep = 1;
-let authMethod = 'email';
 let editingPreference = null;
 
 let onboardingData = {
@@ -30,7 +29,6 @@ let onboardingData = {
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
     setupEventListeners();
-    setupOTPInputs();
 });
 
 async function initApp() {
@@ -81,9 +79,6 @@ async function initApp() {
 }
 
 function setupEventListeners() {
-    // Auth form inputs
-    document.getElementById('login-identifier')?.addEventListener('input', handleIdentifierInput);
-    
     // Step 1: Group type selection
     document.querySelectorAll('#step-1 .selection-card').forEach(card => {
         card.addEventListener('click', () => {
@@ -186,26 +181,6 @@ function setupEventListeners() {
     });
 }
 
-function setupOTPInputs() {
-    document.querySelectorAll('.otp-input').forEach(input => {
-        input.addEventListener('input', (e) => {
-            const value = e.target.value;
-            if (value.length === 1) {
-                const nextIndex = parseInt(e.target.dataset.index) + 1;
-                const nextInput = e.target.parentElement.querySelector(`[data-index="${nextIndex}"]`);
-                if (nextInput) nextInput.focus();
-            }
-        });
-        
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Backspace' && !e.target.value) {
-                const prevIndex = parseInt(e.target.dataset.index) - 1;
-                const prevInput = e.target.parentElement.querySelector(`[data-index="${prevIndex}"]`);
-                if (prevInput) prevInput.focus();
-            }
-        });
-    });
-}
 
 // ==================== SCREEN MANAGEMENT ====================
 
@@ -325,41 +300,16 @@ function showSignupForm() {
     document.getElementById('login-form').classList.remove('active');
 }
 
-function setAuthMethod(method) {
-    authMethod = method;
-    document.querySelectorAll('.toggle-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.method === method);
-    });
-    document.querySelectorAll('.signup-method').forEach(el => {
-        el.classList.toggle('active', el.id === `${method}-signup`);
-    });
-    
-    // Update button text
-    document.getElementById('signup-btn').textContent = 
-        method === 'phone' ? 'Send Verification Code' : 'Create Account';
-}
-
-function handleIdentifierInput(e) {
-    const value = e.target.value;
-    const isPhone = /^[\d\s\-\(\)\+]+$/.test(value) && value.replace(/\D/g, '').length >= 10;
-    
-    // Show password field for email, OTP for phone
-    document.getElementById('login-password-group').classList.toggle('hidden', isPhone);
-    document.getElementById('login-otp-group').classList.toggle('hidden', !isPhone);
-}
-
 async function handleLogin() {
-    const identifier = document.getElementById('login-identifier').value;
-    const isPhone = /^[\d\s\-\(\)\+]+$/.test(identifier);
+    const email = document.getElementById('login-email').value;
+    const password = document.getElementById('login-password').value;
     
-    if (isPhone) {
-        // Phone login - send OTP
-        await requestLoginOTP(identifier);
-    } else {
-        // Email login
-        const password = document.getElementById('login-password').value;
-        await loginWithEmail(identifier, password);
+    if (!email || !password) {
+        alert('Please enter email and password');
+        return;
     }
+    
+    await loginWithEmail(email, password);
 }
 
 async function loginWithEmail(email, password) {
@@ -394,52 +344,22 @@ async function loginWithEmail(email, password) {
     }
 }
 
-async function requestLoginOTP(phone) {
-    try {
-        const response = await fetch(`${API_BASE}/auth/phone/request-otp`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ phone })
-        });
-        
-        if (response.ok) {
-            document.getElementById('login-otp-group').classList.remove('hidden');
-            alert('Verification code sent!');
-        }
-    } catch (error) {
-        console.error('OTP request error:', error);
-        alert('Demo mode: Use code 123456');
-        document.getElementById('login-otp-group').classList.remove('hidden');
-    }
-}
 
 async function handleSignup() {
-    if (authMethod === 'email') {
-        const email = document.getElementById('signup-email').value;
-        const password = document.getElementById('signup-password').value;
-        
-        if (password.length < 8) {
-            alert('Password must be at least 8 characters');
-            return;
-        }
-        
-        await signupWithEmail(email, password);
-    } else {
-        const phone = document.getElementById('signup-phone').value;
-        const phoneOtpGroup = document.getElementById('phone-otp-group');
-        
-        if (phoneOtpGroup.classList.contains('hidden')) {
-            // Send OTP
-            await requestSignupOTP(phone);
-            phoneOtpGroup.classList.remove('hidden');
-            document.getElementById('signup-btn').textContent = 'Verify & Create Account';
-        } else {
-            // Verify OTP
-            const otp = Array.from(document.querySelectorAll('.signup-otp'))
-                .map(input => input.value).join('');
-            await verifySignupOTP(phone, otp);
-        }
+    const email = document.getElementById('signup-email').value;
+    const password = document.getElementById('signup-password').value;
+    
+    if (!email) {
+        alert('Please enter your email');
+        return;
     }
+    
+    if (password.length < 8) {
+        alert('Password must be at least 8 characters');
+        return;
+    }
+    
+    await signupWithEmail(email, password);
 }
 
 async function signupWithEmail(email, password) {
@@ -477,18 +397,6 @@ async function signupWithEmail(email, password) {
     } catch (error) {
         console.error('Signup error:', error);
         simulateSignup(email);
-    }
-}
-
-async function requestSignupOTP(phone) {
-    alert('Demo mode: Use code 123456');
-}
-
-async function verifySignupOTP(phone, otp) {
-    if (otp === '123456' || otp.length === 6) {
-        simulateSignup(phone);
-    } else {
-        alert('Invalid code. Try 123456 for demo.');
     }
 }
 
@@ -1395,7 +1303,6 @@ async function handleFeedback(recId, action, event) {
 window.showLoginForm = showLoginForm;
 window.showSignupForm = showSignupForm;
 window.showAuthFromOnboarding = showAuthFromOnboarding;
-window.setAuthMethod = setAuthMethod;
 window.handleLogin = handleLogin;
 window.handleSignup = handleSignup;
 window.continueAsGuest = continueAsGuest;
@@ -1434,8 +1341,6 @@ window.showDetail = showDetail;
 window.selectSlot = selectSlot;
 window.addToCalendar = addToCalendar;
 window.handleFeedback = handleFeedback;
-window.resendOTP = () => alert('Demo: Code is 123456');
-window.resendSignupOTP = () => alert('Demo: Code is 123456');
 window.showForgotPassword = () => alert('Password reset coming soon!');
 window.clearCache = clearCache;
 
