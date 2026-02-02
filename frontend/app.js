@@ -240,13 +240,39 @@ async function loadDashboardRecommendations() {
     const container = document.getElementById('dashboard-digest-items');
     
     if (loading) loading.style.display = 'block';
-    if (container) container.innerHTML = '<div class="loading" id="dashboard-loading">Loading recommendations...</div>';
+    if (container) container.innerHTML = '<div class="loading" id="dashboard-loading">✨ Getting personalized recommendations...</div>';
     
     try {
-        const response = await fetch(`${API_BASE}/digest`);
+        // Build user profile and prompt
+        const userProfile = getUserProfile();
+        const prompt = buildRecommendationPrompt();
+        
+        // Try AI-powered recommendations first
+        const response = await fetch(`${API_BASE}/recommendations/ai`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': authToken ? `Bearer ${authToken}` : ''
+            },
+            body: JSON.stringify({ 
+                profile: userProfile,
+                prompt: prompt
+            })
+        });
         
         if (!response.ok) {
-            throw new Error(`Backend error: ${response.status}`);
+            // Fall back to regular digest if AI endpoint fails
+            console.log('AI recommendations unavailable, falling back to digest');
+            const fallbackResponse = await fetch(`${API_BASE}/digest`);
+            if (!fallbackResponse.ok) throw new Error('Backend error');
+            const data = await fallbackResponse.json();
+            window.currentDigest = data;
+            if (data.items?.length > 0) {
+                renderDashboardItems(data.items);
+            } else {
+                throw new Error('No recommendations');
+            }
+            return;
         }
         
         const data = await response.json();
@@ -1170,6 +1196,112 @@ function getRadiusFromTravelTime() {
     if (onboardingData.travel_time_ranges?.includes('30-60')) return 30;
     if (onboardingData.travel_time_ranges?.includes('15-30')) return 15;
     return 10;
+}
+
+// Build recommendation prompt from user profile
+function buildRecommendationPrompt() {
+    const groupLabels = {
+        'solo': 'myself (solo)',
+        'couple': 'me and my partner (couple)',
+        'family': 'my family with kids',
+        'friends': 'me and my friends'
+    };
+    
+    const interestLabels = {
+        'nature': 'nature, parks, and outdoor activities',
+        'arts_culture': 'arts, culture, and museums',
+        'food_drinks': 'food, restaurants, and drinks',
+        'adventure': 'adventure and sports',
+        'learning': 'learning and science',
+        'entertainment': 'entertainment and shows',
+        'relaxation': 'relaxation and wellness',
+        'shopping': 'shopping and markets',
+        'events': 'local events and festivals'
+    };
+    
+    const energyLabels = {
+        'relaxing': 'relaxing (prefer sitting, viewing, minimal walking)',
+        'moderate': 'moderate (comfortable with walking and light exploring)',
+        'active': 'active (enjoy sports, hiking, and physical activities)'
+    };
+    
+    const timeLabels = {
+        'quick': '1-2 hours per activity',
+        'half_day': '3-4 hours (half-day activities)',
+        'full_day': '5+ hours (full-day experiences)'
+    };
+    
+    const budgetLabels = {
+        'free': 'free activities only',
+        'low': 'budget-friendly (under $25 per person)',
+        'moderate': 'moderate budget (under $50 per person)',
+        'any': 'no budget restrictions'
+    };
+    
+    // Build the prompt
+    const location = onboardingData.home_location?.formatted_address || 'San Francisco, CA';
+    const group = groupLabels[onboardingData.group_type] || 'myself';
+    const interests = onboardingData.interests?.map(i => interestLabels[i]).filter(Boolean).join(', ') || 'various activities';
+    const energy = energyLabels[onboardingData.energy_level] || 'moderate activity level';
+    const timeCommit = timeLabels[onboardingData.time_commitment] || 'flexible time';
+    const budget = budgetLabels[onboardingData.budget] || 'moderate budget';
+    const travelTime = onboardingData.travel_time_ranges?.join(', ').replace(/-/g, '-') + ' minutes' || '30 minutes';
+    const transportation = onboardingData.transportation?.join(', ') || 'car';
+    
+    // Build constraints
+    const constraints = [];
+    if (onboardingData.group_type === 'family') {
+        constraints.push('must be kid-friendly');
+    }
+    if (onboardingData.accessibility?.length) {
+        constraints.push(`accessibility needs: ${onboardingData.accessibility.join(', ')}`);
+    }
+    if (onboardingData.avoid?.length) {
+        constraints.push(`avoid: ${onboardingData.avoid.join(', ')}`);
+    }
+    
+    const prompt = `Generate 5 weekend activity recommendations for someone with this profile:
+
+**Location:** ${location}
+**Planning for:** ${group}
+**Interests:** ${interests}
+**Activity level:** ${energy}
+**Time commitment:** ${timeCommit}
+**Budget:** ${budget}
+**Max travel time:** ${travelTime}
+**Transportation:** ${transportation}
+${constraints.length ? `**Constraints:** ${constraints.join('; ')}` : ''}
+
+For each recommendation, provide:
+1. Name of place/activity
+2. Category (e.g., Park, Museum, Restaurant, Event)
+3. Why it's a good match for this profile
+4. Estimated distance and travel time from their location
+5. Price range (Free, $, $$, $$$)
+6. Best time to visit
+7. Kid-friendly: Yes/No
+8. Indoor/Outdoor
+
+Format as JSON array with these fields: title, category, explanation, distance_miles, travel_time_min, price_flag, best_time, kid_friendly, indoor_outdoor, address`;
+
+    return prompt;
+}
+
+// Get user profile for API
+function getUserProfile() {
+    return {
+        location: onboardingData.home_location,
+        group_type: onboardingData.group_type,
+        interests: onboardingData.interests,
+        energy_level: onboardingData.energy_level,
+        time_commitment: onboardingData.time_commitment,
+        budget: onboardingData.budget,
+        travel_time_ranges: onboardingData.travel_time_ranges,
+        transportation: onboardingData.transportation,
+        accessibility: onboardingData.accessibility,
+        avoid: onboardingData.avoid,
+        kid_friendly: onboardingData.group_type === 'family'
+    };
 }
 
 async function loadDigest() {

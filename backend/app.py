@@ -390,6 +390,228 @@ def get_digest():
     
     return jsonify(response_data)
 
+# ========== AI-POWERED RECOMMENDATIONS ==========
+
+@app.route('/v1/recommendations/ai', methods=['POST'])
+def get_ai_recommendations():
+    """Get AI-powered recommendations based on user profile"""
+    data = request.json
+    profile = data.get('profile', {})
+    prompt = data.get('prompt', '')
+    
+    print(f"[AI] Received recommendation request")
+    print(f"[AI] User profile: {json.dumps(profile, indent=2)}")
+    print(f"[AI] Prompt length: {len(prompt)} chars")
+    
+    # For now, generate smart recommendations based on profile
+    # In production, this would call an AI model (OpenAI, Claude, etc.)
+    
+    items = generate_personalized_recommendations(profile)
+    
+    response_data = {
+        "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
+        "generated_at": datetime.now().isoformat(),
+        "ai_powered": True,
+        "items": items
+    }
+    
+    return jsonify(response_data)
+
+
+def generate_personalized_recommendations(profile):
+    """Generate recommendations based on user profile"""
+    
+    # Extract profile data with defaults
+    location = profile.get('location', {})
+    group_type = profile.get('group_type', 'solo')
+    interests = profile.get('interests', [])
+    energy_level = profile.get('energy_level', 'moderate')
+    budget = profile.get('budget', 'moderate')
+    travel_times = profile.get('travel_time_ranges', ['15-30'])
+    kid_friendly = profile.get('kid_friendly', False)
+    avoid = profile.get('avoid', [])
+    
+    # Map interests to categories
+    interest_to_category = {
+        'nature': 'parks',
+        'arts_culture': 'museums',
+        'food_drinks': 'food',
+        'adventure': 'attractions',
+        'learning': 'museums',
+        'entertainment': 'attractions',
+        'relaxation': 'parks',
+        'shopping': 'attractions',
+        'events': 'events'
+    }
+    
+    target_categories = list(set([interest_to_category.get(i, 'attractions') for i in interests]))
+    if not target_categories:
+        target_categories = ['parks', 'museums', 'attractions']
+    
+    # Get max travel time
+    max_travel = 30  # default
+    if '60+' in travel_times:
+        max_travel = 90
+    elif '30-60' in travel_times:
+        max_travel = 60
+    elif '15-30' in travel_times:
+        max_travel = 30
+    elif '0-15' in travel_times:
+        max_travel = 15
+    
+    # Budget filter
+    budget_filters = {
+        'free': ['free'],
+        'low': ['free', 'paid'],
+        'moderate': ['free', 'paid'],
+        'any': ['free', 'paid']
+    }
+    allowed_prices = budget_filters.get(budget, ['free', 'paid'])
+    
+    # Filter places based on profile
+    filtered_places = []
+    for place in MOCK_PLACES:
+        # Category match
+        if place['category'] not in target_categories:
+            continue
+        
+        # Travel time filter
+        if place['travel_time_min'] > max_travel:
+            continue
+        
+        # Budget filter
+        if place['price_flag'] not in allowed_prices:
+            continue
+        
+        # Kid-friendly filter
+        if kid_friendly and not place.get('kid_friendly', False):
+            continue
+        
+        # Avoid crowds filter
+        if 'crowds' in avoid and place.get('crowded', False):
+            continue
+        
+        filtered_places.append(place)
+    
+    # Sort by relevance (matching interests first, then by travel time)
+    def relevance_score(p):
+        score = 0
+        # Interest match bonus
+        if p['category'] in [interest_to_category.get(i) for i in interests]:
+            score += 10
+        # Closer is better
+        score -= p['travel_time_min'] / 10
+        # Rating bonus
+        score += p.get('rating', 4) * 2
+        return score
+    
+    filtered_places.sort(key=relevance_score, reverse=True)
+    
+    # Take top 5
+    top_places = filtered_places[:5]
+    
+    # If not enough, add some fallbacks
+    if len(top_places) < 5:
+        for place in MOCK_PLACES:
+            if place not in top_places:
+                top_places.append(place)
+            if len(top_places) >= 5:
+                break
+    
+    # Generate personalized explanations
+    items = []
+    now = datetime.now()
+    week = f"{now.year}-{now.isocalendar()[1]:02d}"
+    
+    for i, place in enumerate(top_places):
+        explanation = generate_explanation(place, profile, interests)
+        
+        items.append({
+            "rec_id": f"ai_{week}_{i}",
+            "type": "place",
+            "place_id": place['place_id'],
+            "title": place['name'],
+            "category": place['category'],
+            "distance_miles": place['distance_miles'],
+            "travel_time_min": place['travel_time_min'],
+            "price_flag": place['price_flag'],
+            "kid_friendly": place.get('kid_friendly', False),
+            "indoor_outdoor": place.get('indoor_outdoor', 'outdoor'),
+            "explanation": explanation,
+            "source_url": f"https://maps.google.com/?q={place['lat']},{place['lng']}",
+            "address": place['address'],
+            "rating": place.get('rating', 4.0),
+            "ai_matched": True
+        })
+    
+    return items
+
+
+def generate_explanation(place, profile, interests):
+    """Generate a personalized explanation for why this place is recommended"""
+    
+    group_type = profile.get('group_type', 'solo')
+    energy_level = profile.get('energy_level', 'moderate')
+    
+    # Group-specific language
+    group_phrases = {
+        'solo': "Perfect for a solo adventure",
+        'couple': "Great for a romantic outing",
+        'family': "Fun for the whole family",
+        'friends': "Awesome spot to hang with friends"
+    }
+    
+    # Energy-specific language
+    energy_phrases = {
+        'relaxing': "relaxed atmosphere",
+        'moderate': "nice mix of exploration and downtime",
+        'active': "plenty of activities to keep you moving"
+    }
+    
+    # Category-specific benefits
+    category_benefits = {
+        'parks': "enjoy nature and fresh air",
+        'museums': "discover something new and interesting",
+        'food': "treat yourself to great food",
+        'attractions': "have an exciting experience",
+        'events': "join a fun local event"
+    }
+    
+    # Build explanation
+    parts = []
+    
+    # Group phrase
+    if group_type in group_phrases:
+        parts.append(group_phrases[group_type])
+    
+    # Travel time
+    if place['travel_time_min'] <= 15:
+        parts.append(f"just {place['travel_time_min']} minutes away")
+    else:
+        parts.append(f"only {place['travel_time_min']} min drive")
+    
+    # Category benefit
+    cat = place['category']
+    if cat in category_benefits:
+        parts.append(category_benefits[cat])
+    
+    # Price mention
+    if place['price_flag'] == 'free':
+        parts.append("and it's free!")
+    
+    # Kid-friendly mention
+    if place.get('kid_friendly') and group_type == 'family':
+        parts.append("Kids will love it!")
+    
+    # Join parts
+    if len(parts) >= 3:
+        return f"{parts[0]} — {parts[1]}, {parts[2]}"
+    elif len(parts) == 2:
+        return f"{parts[0]} — {parts[1]}"
+    else:
+        return f"Recommended based on your preferences"
+
+
 @app.route('/v1/feedback', methods=['POST'])
 @require_auth
 def submit_feedback():
