@@ -6,7 +6,7 @@
 ```bash
 curl http://localhost:5001/health
 ```
-Should return: `{"status": "ok", "service": "weekend-planner-api"}`
+Should return: `{"status": "ok", "service": "activity-planner-api"}`
 
 ### 2. Check Browser Console
 1. Open Developer Tools (F12 or Cmd+Option+I)
@@ -83,7 +83,7 @@ When you submit the onboarding form, you should see debug logs:
 
 1. **Start Backend:**
    ```bash
-   cd weekend-planner/backend
+   cd activity-planner/backend
    source venv/bin/activate
    python app.py
    ```

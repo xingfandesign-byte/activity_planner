@@ -11,7 +11,7 @@ curl http://localhost:5001/health
 
 You should see:
 ```json
-{"status": "ok", "service": "weekend-planner-api"}
+{"status": "ok", "service": "activity-planner-api"}
 ```
 
 If you get a connection error, the backend is not running.
@@ -19,7 +19,7 @@ If you get a connection error, the backend is not running.
 ### Step 2: Start the Backend
 
 ```bash
-cd weekend-planner/backend
+cd activity-planner/backend
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 python app.py
 ```
@@ -27,7 +27,7 @@ python app.py
 You should see:
 ```
 ==================================================
-Weekend Planner Backend API
+Activity Planner Backend API
 ==================================================
 Server starting on http://localhost:5001
 API endpoints available at http://localhost:5001/v1
@@ -67,7 +67,7 @@ If you see CORS errors in the console, make sure:
 ### Step 6: Verify Frontend is Running
 
 ```bash
-cd weekend-planner/frontend
+cd activity-planner/frontend
 python3 -m http.server 8000
 ```
 
@@ -78,7 +78,7 @@ Then open http://localhost:8000 in your browser.
 The easiest way to start both servers:
 
 ```bash
-cd weekend-planner
+cd activity-planner
 ./run.sh
 ```
 
@@ -115,7 +115,7 @@ This will start both backend and frontend automatically.
 
 **Solution:** The backend is not running. Start it with:
 ```bash
-cd weekend-planner/backend
+cd activity-planner/backend
 source venv/bin/activate
 python app.py
 ```

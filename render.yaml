@@ -1,0 +1,32 @@
+# Render Blueprint - Activity Planner (Free Tier)
+# Deploy: Push to GitHub, connect repo at render.com, create Blueprint
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # Backend API (Flask)
+  - type: web
+    name: activity-planner-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false  # Set to your frontend URL after deploy (e.g. https://activity-planner.onrender.com)
+      - key: GOOGLE_REDIRECT_URI
+        sync: false  # Set to https://activity-planner-api.onrender.com/v1/auth/google/callback
+
+  # Frontend (static site)
+  - type: web
+    name: activity-planner
+    runtime: static
+    plan: free
+    buildCommand: bash scripts/build-frontend.sh
+    staticPublishPath: frontend
+    envVars:
+      - key: API_URL
+        sync: false  # Set to https://activity-planner-api.onrender.com after backend deploys
