@@ -10,15 +10,15 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1
     healthCheckPath: /health
     envVars:
       - key: SECRET_KEY
         generateValue: true
       - key: FRONTEND_URL
-        sync: false  # Set to your frontend URL after deploy (e.g. https://activity-planner.onrender.com)
+        sync: false  # Set to https://activity-planner-5vb9.onrender.com
       - key: GOOGLE_REDIRECT_URI
-        sync: false  # Set to https://activity-planner-api.onrender.com/v1/auth/google/callback
+        sync: false  # Set to https://activity-planner-1-jvw3.onrender.com/v1/auth/google/callback
 
   # Frontend (static site)
   - type: web
@@ -29,4 +29,4 @@ services:
     staticPublishPath: frontend
     envVars:
       - key: API_URL
-        sync: false  # Set to https://activity-planner-api.onrender.com after backend deploys
+        sync: false  # Set to https://activity-planner-1-jvw3.onrender.com after backend deploys

@@ -41,7 +41,12 @@ def verify_password(password, stored_hash):
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-CORS(app, supports_credentials=True)
+# CORS: allow frontend origin for OAuth (credentials required for session cookie)
+_cors_origins = ['http://localhost:8000']
+_furl = os.environ.get('FRONTEND_URL', '').rstrip('/')
+if _furl:
+    _cors_origins.append(_furl)
+CORS(app, supports_credentials=True, origins=_cors_origins)
 
 # Google Places API Configuration
 GOOGLE_PLACES_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '')

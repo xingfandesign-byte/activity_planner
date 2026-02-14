@@ -20,9 +20,11 @@ Deploy Activity Planner to Render with the backend API and frontend as separate 
 1. Click **Apply** to create the services
 2. The backend (`activity-planner-api`) will deploy first
 3. Wait for it to finish (2–5 minutes)
-4. Copy the backend URL: `https://activity-planner-api.onrender.com` (or your custom name)
+4. Copy the backend URL: `https://activity-planner-1-jvw3.onrender.com` (or your custom name)
 
 ## Step 3: Set Environment Variables
+
+**Important:** Use your **actual** Render URLs from the dashboard. Render assigns unique URLs (e.g. `activity-planner-5vb9.onrender.com`) when the default name is taken.
 
 ### Backend (activity-planner-api)
 
@@ -30,8 +32,8 @@ In the backend service → **Environment**:
 
 | Key | Value |
 |-----|-------|
-| `FRONTEND_URL` | `https://activity-planner.onrender.com` (your frontend URL) |
-| `GOOGLE_REDIRECT_URI` | `https://activity-planner-api.onrender.com/v1/auth/google/callback` |
+| `FRONTEND_URL` | `https://activity-planner-5vb9.onrender.com` |
+| `GOOGLE_REDIRECT_URI` | `https://activity-planner-1-jvw3.onrender.com/v1/auth/google/callback` |
 
 Add any API keys you use (optional):
 
@@ -45,7 +47,7 @@ In the frontend service → **Environment**:
 
 | Key | Value |
 |-----|-------|
-| `API_URL` | `https://activity-planner-api.onrender.com` (your backend URL) |
+| `API_URL` | `https://activity-planner-1-jvw3.onrender.com` |
 
 ## Step 4: Redeploy Frontend
 
@@ -59,8 +61,8 @@ After setting `API_URL`, trigger a manual deploy for the frontend:
 In [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials:
 
 1. Edit your OAuth 2.0 Client ID
-2. **Authorized JavaScript origins:** add `https://activity-planner.onrender.com`
-3. **Authorized redirect URIs:** add `https://activity-planner-api.onrender.com/v1/auth/google/callback`
+2. **Authorized JavaScript origins:** add `https://activity-planner-5vb9.onrender.com`
+3. **Authorized redirect URIs:** add `https://activity-planner-1-jvw3.onrender.com/v1/auth/google/callback`
 
 ## Free Tier Notes
 
