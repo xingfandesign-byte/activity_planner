@@ -1,7 +1,11 @@
 """
-Weekend Planner Backend API
+Activity Planner Backend API
 Calendar-first V1 implementation
 """
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
@@ -52,6 +56,14 @@ GOOGLE_REDIRECT_URI = os.environ.get('GOOGLE_REDIRECT_URI', 'http://localhost:50
 places_cache = {}
 # Cache for geocoding (ZIP/address -> lat,lng) to avoid repeated lookups
 geocode_cache = {}
+# Cache for image search (query -> url) to avoid hitting API limits
+image_search_cache = {}
+
+# Image search: Google Custom Search, Pexels, Unsplash (keywords from title + event detail)
+GOOGLE_CSE_API_KEY = os.environ.get('GOOGLE_CSE_API_KEY', '')
+GOOGLE_CSE_CX = os.environ.get('GOOGLE_CSE_CX', '')  # Custom Search Engine ID with Image search enabled
+PEXELS_API_KEY = os.environ.get('PEXELS_API_KEY', '')
+UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
 
 # Database persistence (backend/db.py uses SQLite)
 import db as _db
@@ -305,6 +317,172 @@ def update_preferences():
     print(f"[DEBUG] Preferences saved. Categories: {data.get('categories', [])}")
     return jsonify({"status": "updated", "preferences": data})
 
+
+# ========== GEOCODING ==========
+
+@app.route('/v1/geocode', methods=['GET'])
+def geocode_address():
+    """Geocode an address or ZIP code to lat/lng"""
+    address = request.args.get('address', '').strip()
+    if not address:
+        return jsonify({"error": "Address parameter required"}), 400
+    
+    result = geocode_to_lat_lng(address)
+    if result:
+        lat, lng = result
+        return jsonify({
+            "lat": lat,
+            "lng": lng,
+            "formatted_address": address
+        })
+    else:
+        return jsonify({"error": "Could not geocode address"}), 404
+
+
+@app.route('/v1/reverse-geocode', methods=['GET'])
+def reverse_geocode():
+    """Reverse geocode lat/lng to address"""
+    try:
+        lat = float(request.args.get('lat', 0))
+        lng = float(request.args.get('lng', 0))
+    except (ValueError, TypeError):
+        return jsonify({"error": "Valid lat and lng parameters required"}), 400
+    
+    if lat == 0 and lng == 0:
+        return jsonify({"error": "Valid lat and lng parameters required"}), 400
+    
+    try:
+        url = "https://nominatim.openstreetmap.org/reverse"
+        r = requests.get(
+            url, 
+            params={"lat": lat, "lon": lng, "format": "json"},
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=10
+        )
+        
+        if r.status_code == 200:
+            data = r.json()
+            address = data.get('address', {})
+            
+            # Build formatted address
+            parts = []
+            if address.get('city'):
+                parts.append(address['city'])
+            elif address.get('town'):
+                parts.append(address['town'])
+            elif address.get('village'):
+                parts.append(address['village'])
+            elif address.get('county'):
+                parts.append(address['county'])
+            
+            if address.get('state'):
+                parts.append(address['state'])
+            
+            formatted = ", ".join(parts) if parts else data.get('display_name', 'Unknown location')
+            
+            return jsonify({
+                "lat": lat,
+                "lng": lng,
+                "formatted_address": formatted,
+                "display_name": data.get('display_name', '')
+            })
+        else:
+            return jsonify({"error": "Reverse geocoding failed"}), 500
+            
+    except Exception as e:
+        print(f"[REVERSE_GEOCODE] Error: {e}")
+        return jsonify({"error": "Reverse geocoding failed"}), 500
+
+
+@app.route('/v1/image-search', methods=['GET'])
+def image_search():
+    """
+    Search for an image by query (keywords from title + event detail + location).
+    Uses Google Custom Search API (Google Images) if configured, else Pexels, else Unsplash.
+    Returns first relevant image URL for the location/event.
+    """
+    query = request.args.get('q', '').strip()
+    if not query or len(query) < 2:
+        return jsonify({"url": None, "source": None}), 200
+
+    cache_key = f"img:{query[:100]}"
+    if cache_key in image_search_cache:
+        cached = image_search_cache[cache_key]
+        return jsonify({"url": cached.get("url"), "source": cached.get("source")}), 200
+
+    url = None
+    source = None
+
+    # 1. Try Google Custom Search (Google Images)
+    if GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX:
+        try:
+            gurl = "https://www.googleapis.com/customsearch/v1"
+            r = requests.get(
+                gurl,
+                params={
+                    "key": GOOGLE_CSE_API_KEY,
+                    "cx": GOOGLE_CSE_CX,
+                    "q": query,
+                    "searchType": "image",
+                    "num": 3,
+                    "safe": "active",
+                },
+                timeout=8,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                items = data.get("items", [])
+                if items:
+                    url = items[0].get("link")
+                    source = "google"
+        except Exception as e:
+            print(f"[IMAGE_SEARCH] Google CSE error: {e}")
+
+    # 2. Fallback: Pexels API
+    if not url and PEXELS_API_KEY:
+        try:
+            pexels_url = "https://api.pexels.com/v1/search"
+            r = requests.get(
+                pexels_url,
+                params={"query": query, "per_page": 3},
+                headers={"Authorization": PEXELS_API_KEY},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                photos = data.get("photos", [])
+                if photos:
+                    # Prefer medium size for good quality without huge files
+                    src = photos[0].get("src", {})
+                    url = src.get("medium") or src.get("large") or src.get("original")
+                    source = "pexels"
+        except Exception as e:
+            print(f"[IMAGE_SEARCH] Pexels error: {e}")
+
+    # 3. Fallback: Unsplash API (keywords from title + event detail)
+    if not url and UNSPLASH_ACCESS_KEY:
+        try:
+            unsplash_url = "https://api.unsplash.com/search/photos"
+            r = requests.get(
+                unsplash_url,
+                params={"query": query, "per_page": 3},
+                headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
+                timeout=8,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                results = data.get("results", [])
+                if results:
+                    urls = results[0].get("urls", {})
+                    url = urls.get("regular") or urls.get("small") or urls.get("full")
+                    source = "unsplash"
+        except Exception as e:
+            print(f"[IMAGE_SEARCH] Unsplash error: {e}")
+
+    image_search_cache[cache_key] = {"url": url, "source": source}
+    return jsonify({"url": url, "source": source}), 200
+
+
 # ========== RECOMMENDATIONS ==========
 
 def should_dedup(place_id, user_id, prefs):
@@ -436,7 +614,7 @@ def filter_places(prefs, user_id, user_lat=None, user_lng=None):
 @app.route('/v1/digest', methods=['GET'])
 @require_auth
 def get_digest():
-    """Get weekend digest for current week"""
+    """Get activity digest for current week"""
     user_id = get_user_id()
     prefs = db.get_preferences(user_id) or {}
     
@@ -638,28 +816,43 @@ def calculate_distance(lat1, lng1, lat2, lng2):
 
 def geocode_to_lat_lng(query):
     """Resolve ZIP code or address to lat/lng using OpenStreetMap Nominatim (no API key)."""
+    import re
     query = (query or "").strip()
     if not query:
         return None
     cache_key = query.lower()
     if cache_key in geocode_cache:
+        print(f"[GEOCODE] Cache hit for '{query}'")
         return geocode_cache[cache_key]
     try:
-        # Prefer US for ZIP codes (5 digits)
+        # Determine the search query
         if query.isdigit() and len(query) == 5:
+            # US ZIP code
+            q = f"{query}, USA"
+        elif re.search(r',\s*[A-Z]{2}\s*(\d{5})?$', query.upper()):
+            # Has US state abbreviation (e.g., "Palo Alto, CA" or "123 Main St, City, CA 94301")
+            # Append USA for better results
             q = f"{query}, USA"
         else:
-            q = f"{query}, USA" if query.isdigit() else query
+            q = query
+        
+        print(f"[GEOCODE] Searching for: '{q}'")
         url = "https://nominatim.openstreetmap.org/search"
-        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "WeekendPlanner/1.0"}, timeout=5)
+        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=10)
+        
         if r.status_code != 200:
+            print(f"[GEOCODE] HTTP {r.status_code} for '{q}'")
             return None
+        
         data = r.json()
         if not data:
+            print(f"[GEOCODE] No results for '{q}'")
             return None
+        
         lat = float(data[0]["lat"])
         lng = float(data[0]["lon"])
         geocode_cache[cache_key] = (lat, lng)
+        print(f"[GEOCODE] Found: '{q}' -> ({lat}, {lng})")
         return (lat, lng)
     except Exception as e:
         print(f"[GEOCODE] Error for '{query}': {e}")
@@ -851,11 +1044,11 @@ def get_ai_recommendations():
         max_radius_miles = get_max_radius_miles(travel_times)
         week_str = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
 
-        # Manus-only: ask Manus to produce the full recommendation list
+        # Fetch recommendations from all local feed sources
         items = local_feeds.get_local_feed_recommendations(
             profile, user_lat, user_lng,
             geocode_fn=geocode_to_lat_lng,
-            max_items=5,
+            max_items=15,  # Return up to 15 ranked recommendations
             max_travel_min=max_travel,
             max_radius_miles=max_radius_miles,
             week_str=week_str,
@@ -1370,7 +1563,7 @@ def get_event_template():
         end_time = saturday.replace(hour=12, minute=0)
     
     event = {
-        "summary": f"{place['name']} — Weekend Plan",
+        "summary": f"{place['name']} — Activity Plan",
         "start": {
             "dateTime": start_time.isoformat(),
             "timeZone": timezone
@@ -1381,7 +1574,7 @@ def get_event_template():
         },
         "location": place['address'],
         "description": f"{place['name']} - {place.get('category', 'activity')}\n\n"
-                      f"Recommended because: {place.get('explanation', 'Weekend activity')}\n"
+                      f"Recommended because: {place.get('explanation', 'Recommended activity')}\n"
                       f"Distance: {place['distance_miles']} miles ({place['travel_time_min']} min)\n"
                       f"Price: {place['price_flag']}\n"
                       f"Kid-friendly: {'Yes' if place.get('kid_friendly') else 'No'}\n\n"
@@ -1418,7 +1611,7 @@ SMTP_HOST = os.environ.get('SMTP_HOST', '')
 SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '') or os.environ.get('SMTP_PASS', '')
-EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER or 'noreply@weekendplanner.local')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER or 'noreply@activityplanner.local')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')  # e.g. https://app.example.com
 
 
@@ -1427,10 +1620,10 @@ def send_password_reset_email(to_email, reset_link):
     if not SMTP_HOST or not SMTP_USER:
         print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
         return False
-    subject = "Reset your Weekend Planner password"
+    subject = "Reset your Activity Planner password"
     text = f"""Hi,
 
-You requested a password reset for your Weekend Planner account.
+You requested a password reset for your Activity Planner account.
 
 Click the link below to set a new password (valid for 1 hour):
 
@@ -1438,13 +1631,13 @@ Click the link below to set a new password (valid for 1 hour):
 
 If you didn't request this, you can ignore this email.
 
-— Weekend Planner
+— Activity Planner
 """
     html = f"""<p>Hi,</p>
-<p>You requested a password reset for your Weekend Planner account.</p>
+<p>You requested a password reset for your Activity Planner account.</p>
 <p><a href="{reset_link}">Click here to set a new password</a> (valid for 1 hour).</p>
 <p>If you didn't request this, you can ignore this email.</p>
-<p>— Weekend Planner</p>"""
+<p>— Activity Planner</p>"""
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
@@ -1469,10 +1662,10 @@ def send_verification_email(to_email, verify_link):
     if not SMTP_HOST or not SMTP_USER:
         print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
         return False
-    subject = "Verify your Weekend Planner email"
+    subject = "Verify your Activity Planner email"
     text = f"""Hi,
 
-Thanks for signing up for Weekend Planner.
+Thanks for signing up for Activity Planner.
 
 Click the link below to verify your email (valid for 24 hours):
 
@@ -1480,13 +1673,13 @@ Click the link below to verify your email (valid for 24 hours):
 
 If you didn't create an account, you can ignore this email.
 
-— Weekend Planner
+— Activity Planner
 """
     html = f"""<p>Hi,</p>
-<p>Thanks for signing up for Weekend Planner.</p>
+<p>Thanks for signing up for Activity Planner.</p>
 <p><a href="{verify_link}">Click here to verify your email</a> (valid for 24 hours).</p>
 <p>If you didn't create an account, you can ignore this email.</p>
-<p>— Weekend Planner</p>"""
+<p>— Activity Planner</p>"""
     try:
         msg = MIMEMultipart('alternative')
         msg['Subject'] = subject
@@ -1504,6 +1697,173 @@ If you didn't create an account, you can ignore this email.
     except Exception as e:
         print(f"[EMAIL] Failed to send verification to {to_email}: {e}")
         return False
+
+
+def send_friday_digest_email(to_email, user_name, recommendations, frontend_url):
+    """Send Friday digest email with personalized recommendations. Returns True on success."""
+    if not SMTP_HOST or not SMTP_USER:
+        print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
+        return False
+    
+    if not recommendations:
+        print(f"[EMAIL] No recommendations for {to_email}, skipping digest")
+        return False
+    
+    greeting = f"Hi {user_name}," if user_name else "Hi,"
+    subject = "🎉 Your Activity Planner Digest - Top Picks for You!"
+    
+    # Build recommendation list for plain text
+    rec_text_list = []
+    for i, rec in enumerate(recommendations[:5], 1):
+        title = rec.get('title', 'Event')
+        distance = rec.get('distance_display', 'n/a')
+        address = rec.get('address', '')
+        event_date = rec.get('event_date', '')
+        rec_text_list.append(f"{i}. {title}\n   📍 {address or 'Location TBD'}\n   🚗 {distance}")
+    
+    rec_text = "\n\n".join(rec_text_list)
+    
+    text = f"""{greeting}
+
+Here are your personalized activity recommendations! 🌟
+
+{rec_text}
+
+Ready to plan? Visit Activity Planner to see more details and add events to your calendar.
+
+{frontend_url or 'https://activityplanner.local'}
+
+Happy exploring!
+— The Activity Planner Team
+
+---
+You're receiving this because you signed up for Activity Planner digests.
+"""
+
+    # Build HTML version
+    rec_html_items = []
+    for rec in recommendations[:5]:
+        title = rec.get('title', 'Event')
+        distance = rec.get('distance_display', 'n/a')
+        address = rec.get('address', '')
+        event_date = rec.get('event_date', '')
+        description = (rec.get('description') or rec.get('explanation') or '')[:150]
+        event_link = rec.get('event_link', '')
+        
+        # Format date if present
+        date_html = ''
+        if event_date:
+            try:
+                from datetime import datetime as dt
+                date_obj = dt.fromisoformat(event_date.replace('Z', '+00:00'))
+                date_html = f'<span style="color: #6366f1; font-size: 14px;">📅 {date_obj.strftime("%a, %b %d at %I:%M %p")}</span><br>'
+            except:
+                date_html = f'<span style="color: #6366f1; font-size: 14px;">📅 {event_date}</span><br>'
+        
+        rec_html_items.append(f'''
+        <div style="background: #f9fafb; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
+            <h3 style="margin: 0 0 8px 0; color: #111; font-size: 18px;">{title}</h3>
+            {date_html}
+            <p style="margin: 8px 0; color: #555; font-size: 14px;">{description}</p>
+            <p style="margin: 8px 0; color: #666; font-size: 13px;">📍 {address or 'Location TBD'} &nbsp;|&nbsp; 🚗 {distance}</p>
+            {f'<a href="{event_link}" style="color: #6366f1; text-decoration: none; font-size: 14px;">View event →</a>' if event_link else ''}
+        </div>
+        ''')
+    
+    rec_html = "".join(rec_html_items)
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 24px;">
+            <h1 style="color: #6366f1; margin: 0;">🎉 Activity Planner</h1>
+            <p style="color: #666; margin: 8px 0 0 0;">Your personalized activity digest</p>
+        </div>
+        
+        <p style="font-size: 16px;">{greeting}</p>
+        <p style="font-size: 16px;">Here are your top activity picks! 🌟</p>
+        
+        {rec_html}
+        
+        <div style="text-align: center; margin-top: 24px;">
+            <a href="{frontend_url or 'https://activityplanner.local'}" style="display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 500;">View All Recommendations</a>
+        </div>
+        
+        <p style="margin-top: 32px; font-size: 16px;">Happy exploring!<br>— The Activity Planner Team</p>
+        
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+        <p style="color: #999; font-size: 12px; text-align: center;">
+            You're receiving this because you signed up for Activity Planner digests.
+        </p>
+    </body>
+    </html>
+    """
+    
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_FROM
+        msg['To'] = to_email
+        msg.attach(MIMEText(text, 'plain'))
+        msg.attach(MIMEText(html, 'html'))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            if SMTP_PASSWORD:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(EMAIL_FROM, [to_email], msg.as_string())
+        print(f"[EMAIL] Friday digest sent to {to_email}")
+        return True
+    except Exception as e:
+        print(f"[EMAIL] Failed to send digest to {to_email}: {e}")
+        return False
+
+
+def send_all_friday_digests():
+    """Send Friday digest emails to all users with preferences. Returns count of emails sent."""
+    from local_feeds import get_local_feed_recommendations
+    
+    users = db.get_all_users_with_preferences()
+    sent_count = 0
+    
+    print(f"[DIGEST] Starting Friday digest for {len(users)} users")
+    
+    for user in users:
+        try:
+            user_id = user.get('id')
+            email = user.get('email')
+            name = user.get('name', '')
+            preferences = user.get('preferences', {})
+            
+            if not email or not preferences:
+                continue
+            
+            # Get personalized recommendations - use default location if not set
+            user_location = preferences.get('location') or {}
+            user_lat = user_location.get('lat') or 37.5485  # Default: Fremont, CA
+            user_lng = user_location.get('lng') or -121.9886
+            
+            recommendations = get_local_feed_recommendations(
+                profile=preferences,
+                user_lat=user_lat,
+                user_lng=user_lng,
+                geocode_fn=geocode_to_lat_lng,
+                max_items=5
+            )
+            
+            if recommendations:
+                if send_friday_digest_email(email, name, recommendations, FRONTEND_URL):
+                    sent_count += 1
+                    
+        except Exception as e:
+            print(f"[DIGEST] Error processing user {user.get('email', 'unknown')}: {e}")
+    
+    print(f"[DIGEST] Completed. Sent {sent_count} digest emails.")
+    return sent_count
 
 
 @app.route('/v1/auth/signup', methods=['POST'])
@@ -2022,7 +2382,7 @@ def create_calendar_event():
     try:
         # Build event payload for Google Calendar API
         event = {
-            'summary': event_data.get('title', 'Weekend Plan'),
+            'summary': event_data.get('title', 'Activity Plan'),
             'location': event_data.get('location', ''),
             'description': event_data.get('description', ''),
         }
@@ -2145,14 +2505,133 @@ def debug_check_email():
     return jsonify({"email": email, "exists": exists})
 
 
+# ==================== FRIDAY DIGEST ENDPOINTS ====================
+
+@app.route('/v1/digest/send-all', methods=['POST'])
+def trigger_all_digests():
+    """
+    Trigger sending Friday digest emails to all users.
+    Should be called by a cron job on Fridays.
+    Requires admin_key query param for security.
+    """
+    admin_key = request.args.get('admin_key', '')
+    expected_key = os.environ.get('ADMIN_API_KEY', 'dev-admin-key')
+    
+    if admin_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    sent_count = send_all_friday_digests()
+    return jsonify({
+        "message": f"Digest emails sent",
+        "sent_count": sent_count
+    })
+
+
+@app.route('/v1/digest/send-test', methods=['POST'])
+def send_test_digest():
+    """
+    Send a test digest email to a specific email address.
+    Body: { "email": "user@example.com" }
+    Requires admin_key query param.
+    """
+    admin_key = request.args.get('admin_key', '')
+    expected_key = os.environ.get('ADMIN_API_KEY', 'dev-admin-key')
+    
+    if admin_key != expected_key:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    data = request.json or {}
+    email = data.get('email', '').strip().lower()
+    
+    if not email:
+        return jsonify({"error": "Email required"}), 400
+    
+    # Find user by email
+    user = db.get_user_by_identifier(email)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    # Get user preferences
+    prefs = db.get_preferences(user['user_id'])
+    if not prefs:
+        return jsonify({"error": "User has no preferences set"}), 400
+    
+    # Get recommendations - use default Bay Area location if user has no location set
+    from local_feeds import get_local_feed_recommendations
+    user_location = prefs.get('location') or {}
+    user_lat = user_location.get('lat') or 37.5485  # Default: Fremont, CA
+    user_lng = user_location.get('lng') or -121.9886
+    
+    recommendations = get_local_feed_recommendations(
+        profile=prefs,
+        user_lat=user_lat,
+        user_lng=user_lng,
+        geocode_fn=geocode_to_lat_lng,
+        max_items=5
+    )
+    
+    if not recommendations:
+        return jsonify({"error": "No recommendations available"}), 400
+    
+    # Send digest
+    success = send_friday_digest_email(
+        email, 
+        user.get('name', ''), 
+        recommendations, 
+        FRONTEND_URL
+    )
+    
+    if success:
+        return jsonify({"message": f"Test digest sent to {email}"})
+    else:
+        return jsonify({"error": "Failed to send email. Check SMTP configuration."}), 500
+
+
+@app.route('/v1/user/digest-preferences', methods=['GET', 'POST'])
+def user_digest_preferences():
+    """
+    GET: Check if user has digest emails enabled.
+    POST: Enable/disable digest emails. Body: { "enabled": true/false }
+    """
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    user_id = db.get_user_id_from_token(token) if token else None
+    
+    if not user_id:
+        return jsonify({"error": "Authorization required"}), 401
+    
+    user = db.get_user_by_user_id(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    if request.method == 'GET':
+        # email_digest is 1 (enabled) by default, 0 means disabled
+        enabled = user.get('email_digest', 1) != 0
+        return jsonify({"digest_enabled": enabled})
+    
+    # POST - update preference
+    data = request.json or {}
+    enabled = data.get('enabled', True)
+    
+    with db.get_conn() as c:
+        c.execute(
+            "UPDATE users SET email_digest = ? WHERE user_id = ?",
+            (1 if enabled else 0, user_id)
+        )
+    
+    return jsonify({
+        "message": f"Digest emails {'enabled' if enabled else 'disabled'}",
+        "digest_enabled": enabled
+    })
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({"status": "ok", "service": "weekend-planner-api"})
+    return jsonify({"status": "ok", "service": "activity-planner-api"})
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("Weekend Planner Backend API")
+    print("Activity Planner Backend API")
     print("=" * 50)
     print("Server starting on http://localhost:5001")
     print("API endpoints available at http://localhost:5001/v1")

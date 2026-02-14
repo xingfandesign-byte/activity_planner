@@ -1,10 +1,10 @@
-# Weekend Planner - Calendar-first V1
+# Activity Planner - Calendar-first V1
 
-A weekend planning tool that sends Friday digests with personalized activity recommendations and integrates with Google Calendar.
+An activity planning tool that sends Friday digests with personalized activity recommendations and integrates with Google Calendar.
 
 ## Features
 
-- **Friday Digest**: Receive personalized weekend activity recommendations
+- **Friday Digest**: Receive personalized activity recommendations
 - **Calendar Integration**: One-click "Add to Calendar" functionality
 - **Deduplication**: Prevents recommending places you've already visited
 - **Preferences**: Customize location, radius, categories, and more
@@ -13,7 +13,7 @@ A weekend planning tool that sends Friday digests with personalized activity rec
 ## Project Structure
 
 ```
-weekend-planner/
+activity-planner/
 ├── backend/          # Flask API server
 │   ├── app.py       # Main API endpoints
 │   └── requirements.txt
@@ -35,7 +35,7 @@ weekend-planner/
 
 1. Navigate to the backend directory:
 ```bash
-cd weekend-planner/backend
+cd activity-planner/backend
 ```
 
 2. Create a virtual environment (recommended):
@@ -60,7 +60,7 @@ The API will be available at `http://localhost:5001`
 
 1. Navigate to the frontend directory:
 ```bash
-cd weekend-planner/frontend
+cd activity-planner/frontend
 ```
 
 2. Serve the frontend using a simple HTTP server:
@@ -89,7 +89,7 @@ http://localhost:8000
    - Configure notification preferences
 
 2. **View Recommendations**:
-   - Browse the weekend digest with 8 personalized recommendations
+   - Browse the activity digest with 8 personalized recommendations
    - Each card shows distance, travel time, price, and other details
 
 3. **Add to Calendar**:
@@ -109,7 +109,7 @@ http://localhost:8000
 - `PUT /v1/preferences` - Update user preferences
 
 ### Recommendations
-- `GET /v1/digest` - Get weekend digest
+- `GET /v1/digest` - Get activity digest
 - `POST /v1/feedback` - Submit feedback on recommendations
 
 ### Visited History
@@ -165,4 +165,4 @@ EMAIL_API_KEY=your-email-service-api-key
 
 ## License
 
-This is a demo implementation based on the Weekend Planner specification.
+This is a demo implementation based on the Activity Planner specification.

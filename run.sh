@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Weekend Planner Startup Script
+# Activity Planner Startup Script
 
-echo "🎉 Starting Weekend Planner..."
+echo "🎉 Starting Activity Planner..."
 
 # Check if Python is available
 if ! command -v python3 &> /dev/null; then
@@ -49,7 +49,7 @@ FRONTEND_PID=$!
 echo "✅ Frontend started (PID: $FRONTEND_PID)"
 echo "   App available at http://localhost:8000"
 echo ""
-echo "✨ Weekend Planner is running!"
+echo "✨ Activity Planner is running!"
 echo "   Press Ctrl+C to stop both servers"
 
 # Wait for user interrupt

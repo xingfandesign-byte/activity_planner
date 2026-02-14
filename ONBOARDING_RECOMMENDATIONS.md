@@ -36,9 +36,9 @@ The current onboarding asks for:
 ```
 ┌────────────────────────────────────────────┐
 │                                            │
-│         🎉 Weekend Planner                 │
+│         🎉 Activity Planner                 │
 │                                            │
-│    Who are you planning weekends for?      │
+│    Who are you planning activities for?      │
 │                                            │
 │    ┌──────────┐  ┌──────────┐              │
 │    │   👤     │  │   👫     │              │
@@ -95,7 +95,7 @@ The current onboarding asks for:
 │    ┌────────────────────────────────┐      │
 │    │  🌐 Browser Location Prompt    │      │
 │    │                                │      │
-│    │  "Weekend Planner wants to     │      │
+│    │  "Activity Planner wants to     │      │
 │    │   know your location"          │      │
 │    │                                │      │
 │    │   [Block]      [Allow]         │      │
@@ -277,7 +277,7 @@ The current onboarding asks for:
 │    └──────────┘ └──────────┘ └──────────┘  │
 │                                            │
 │    When do you usually head out on         │
-│    weekends? (for traffic estimates)       │
+│    activities? (for traffic estimates)       │
 │                                            │
 │    Saturday departure times:               │
 │    ┌──────────┐ ┌──────────┐ ┌──────────┐  │
@@ -471,14 +471,14 @@ async function handleManualEntry(type, input) {
 function handleLocationContinue(saveCheckboxChecked) {
   if (saveCheckboxChecked) {
     // User opted to save - store in localStorage
-    localStorage.setItem('weekend_planner_location', JSON.stringify({
+    localStorage.setItem('activity_planner_location', JSON.stringify({
       ...locationState.data,
       savedAt: new Date().toISOString()
     }));
     locationState.saved = true;
   } else {
     // User skipped save - session only (default)
-    sessionStorage.setItem('weekend_planner_location', JSON.stringify(locationState.data));
+    sessionStorage.setItem('activity_planner_location', JSON.stringify(locationState.data));
     locationState.saved = false;
   }
   
@@ -488,7 +488,7 @@ function handleLocationContinue(saveCheckboxChecked) {
 
 // Check for saved location on app start
 function checkSavedLocation() {
-  const saved = localStorage.getItem('weekend_planner_location');
+  const saved = localStorage.getItem('activity_planner_location');
   if (saved) {
     const data = JSON.parse(saved);
     return {
@@ -781,7 +781,7 @@ function getNavigationLinks(destination, userLocation) {
 ```
 ┌────────────────────────────────────────────┐
 │                                            │
-│    What's your ideal weekend vibe?         │
+│    What's your ideal activity vibe?         │
 │                                            │
 │    Energy Level:                           │
 │    ┌──────────┐ ┌──────────┐ ┌──────────┐  │

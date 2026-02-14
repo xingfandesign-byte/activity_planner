@@ -1,5 +1,5 @@
-// Weekend Planner Frontend - User Account Flow
-const API_BASE = 'http://localhost:5001/v1';
+// Activity Planner Frontend - User Account Flow
+const API_BASE = (typeof window !== 'undefined' && window.API_BASE) || 'http://localhost:5001/v1';
 
 // State
 let currentUser = null;
@@ -24,6 +24,223 @@ let onboardingData = {
     accessibility: [],
     avoid: []
 };
+
+// Loading animation state
+let loadingPhraseInterval = null;
+
+// ==================== MOTIVATIONAL LOADING PHRASES ====================
+
+const motivationalPhrases = {
+    // Solo / Self - inspirational phrases for personal growth
+    solo: [
+        "✨ Your next adventure awaits...",
+        "🌟 Finding moments just for you...",
+        "💫 Discovering your perfect escape...",
+        "🎯 Curating experiences that spark joy...",
+        // Famous quotes for solo/self-discovery
+        '"The only person you are destined to become is the person you decide to be." — Ralph Waldo Emerson',
+        '"Life is either a daring adventure or nothing at all." — Helen Keller',
+        '"Be yourself; everyone else is already taken." — Oscar Wilde',
+        '"The journey of a thousand miles begins with a single step." — Lao Tzu',
+        '"Do one thing every day that scares you." — Eleanor Roosevelt',
+        '"Not all those who wander are lost." — J.R.R. Tolkien',
+        '"The best time to plant a tree was 20 years ago. The second best time is now." — Chinese Proverb',
+        '"You must be the change you wish to see in the world." — Mahatma Gandhi',
+        '"In the middle of difficulty lies opportunity." — Albert Einstein',
+        '"What lies behind us and what lies before us are tiny matters compared to what lies within us." — Ralph Waldo Emerson',
+        '"The only way to do great work is to love what you do." — Steve Jobs',
+        '"Believe you can and you\'re halfway there." — Theodore Roosevelt',
+        '"It is never too late to be what you might have been." — George Eliot',
+        '"The purpose of life is to live it, to taste experience to the utmost." — Eleanor Roosevelt',
+        '"Your time is limited, don\'t waste it living someone else\'s life." — Steve Jobs',
+    ],
+    
+    // Couple - romantic and connection phrases
+    couple: [
+        "💕 Finding romantic adventures for two...",
+        "🌹 Curating special moments together...",
+        "✨ Love is in the details...",
+        "💫 Creating memories side by side...",
+        // Famous quotes about love and togetherness
+        '"The best thing to hold onto in life is each other." — Audrey Hepburn',
+        '"Love is composed of a single soul inhabiting two bodies." — Aristotle',
+        '"In all the world, there is no heart for me like yours." — Maya Angelou',
+        '"Whatever our souls are made of, his and mine are the same." — Emily Brontë',
+        '"The greatest thing you\'ll ever learn is just to love and be loved in return." — Eden Ahbez',
+        '"We loved with a love that was more than love." — Edgar Allan Poe',
+        '"You know you\'re in love when you can\'t fall asleep because reality is finally better than your dreams." — Dr. Seuss',
+        '"Being deeply loved by someone gives you strength, while loving someone deeply gives you courage." — Lao Tzu',
+        '"The best and most beautiful things in this world cannot be seen or even heard, but must be felt with the heart." — Helen Keller',
+        '"Love recognizes no barriers." — Maya Angelou',
+        '"A successful marriage requires falling in love many times, always with the same person." — Mignon McLaughlin',
+        '"Where there is love there is life." — Mahatma Gandhi',
+    ],
+    
+    // Family - warm, inclusive family phrases
+    family: [
+        "👨‍👩‍👧‍👦 Finding fun for the whole family...",
+        "🏠 Home is where the heart is, adventure is where we go...",
+        "🎈 Making memories that last a lifetime...",
+        "🌈 Family time is the best time...",
+        // Famous quotes about family
+        '"Family is not an important thing. It\'s everything." — Michael J. Fox',
+        '"The love of a family is life\'s greatest blessing." — Unknown',
+        '"In family life, love is the oil that eases friction." — Friedrich Nietzsche',
+        '"The family is one of nature\'s masterpieces." — George Santayana',
+        '"Other things may change us, but we start and end with family." — Anthony Brandt',
+        '"Family means no one gets left behind or forgotten." — David Ogden Stiers',
+        '"The most important thing in the world is family and love." — John Wooden',
+        '"Children are the anchors of a mother\'s life." — Sophocles',
+        '"A happy family is but an earlier heaven." — George Bernard Shaw',
+        '"The memories we make with our family is everything." — Candace Cameron Bure',
+        '"Family is the most important thing in the world." — Princess Diana',
+        '"To us, family means putting your arms around each other and being there." — Barbara Bush',
+        '"There is no doubt that it is around the family that all the greatest virtues are created." — Winston Churchill',
+        '"Call it a clan, call it a network, call it a tribe, call it a family: Whatever you call it, whoever you are, you need one." — Jane Howard',
+    ],
+    
+    // Friends - fun, social phrases
+    friends: [
+        "🎉 Rally the crew, adventure awaits...",
+        "🍻 Finding your squad's next hangout...",
+        "✨ Good times with great friends incoming...",
+        "🎊 The best stories start with 'Remember when...'",
+        // Famous quotes about friendship
+        '"A friend is someone who knows all about you and still loves you." — Elbert Hubbard',
+        '"Friendship is born at that moment when one person says to another, \'What! You too?\'" — C.S. Lewis',
+        '"There is nothing I would not do for those who are really my friends." — Jane Austen',
+        '"A real friend is one who walks in when the rest of the world walks out." — Walter Winchell',
+        '"Friends are the family you choose." — Jess C. Scott',
+        '"Life was meant for good friends and great adventures." — Unknown',
+        '"Good friends, good books, and a sleepy conscience: this is the ideal life." — Mark Twain',
+        '"The only way to have a friend is to be one." — Ralph Waldo Emerson',
+        '"True friends are never apart, maybe in distance but never in heart." — Helen Keller',
+        '"Friendship is the only cement that will ever hold the world together." — Woodrow Wilson',
+        '"A sweet friendship refreshes the soul." — Proverbs 27:9',
+        '"Friends show their love in times of trouble, not in happiness." — Euripides',
+        '"Lots of people want to ride with you in the limo, but what you want is someone who will take the bus with you." — Oprah Winfrey',
+    ],
+    
+    // Default / fallback phrases
+    default: [
+        "✨ Getting personalized recommendations...",
+        "🔍 Searching for the perfect activities...",
+        "🌟 Curating your activity possibilities...",
+        "💫 Finding what's happening near you...",
+        '"The world is a book and those who do not travel read only one page." — Saint Augustine',
+        '"Life is what happens when you\'re busy making other plans." — John Lennon',
+        '"Twenty years from now you will be more disappointed by the things you didn\'t do." — Mark Twain',
+        '"Adventure is worthwhile in itself." — Amelia Earhart',
+        '"Take only memories, leave only footprints." — Chief Seattle',
+        '"The real voyage of discovery consists not in seeking new landscapes, but in having new eyes." — Marcel Proust',
+    ],
+    
+    // Interest-specific additions
+    interests: {
+        nature: [
+            "🌲 Nature is calling...",
+            '"In every walk with nature, one receives far more than he seeks." — John Muir',
+            '"Look deep into nature, and then you will understand everything better." — Albert Einstein',
+            '"The earth has music for those who listen." — Shakespeare',
+            '"Adopt the pace of nature: her secret is patience." — Ralph Waldo Emerson',
+        ],
+        arts_culture: [
+            "🎨 Culture and creativity await...",
+            '"Every artist was first an amateur." — Ralph Waldo Emerson',
+            '"Art washes away from the soul the dust of everyday life." — Pablo Picasso',
+            '"The purpose of art is washing the dust of daily life off our souls." — Pablo Picasso',
+            '"Creativity takes courage." — Henri Matisse',
+        ],
+        food_drink: [
+            "🍽️ Delicious discoveries ahead...",
+            '"One cannot think well, love well, sleep well, if one has not dined well." — Virginia Woolf',
+            '"Life is uncertain. Eat dessert first." — Ernestine Ulmer',
+            '"Food is symbolic of love when words are inadequate." — Alan D. Wolfelt',
+            '"Cooking is love made visible." — Unknown',
+        ],
+        fitness: [
+            "💪 Energizing activities incoming...",
+            '"The only bad workout is the one that didn\'t happen." — Unknown',
+            '"Take care of your body. It\'s the only place you have to live." — Jim Rohn',
+            '"Physical fitness is the first requisite of happiness." — Joseph Pilates',
+            '"The body achieves what the mind believes." — Napoleon Hill',
+        ],
+        nightlife: [
+            "🌙 The night is young...",
+            '"We are all in the gutter, but some of us are looking at the stars." — Oscar Wilde',
+            '"The night is more alive and more richly colored than the day." — Vincent van Gogh',
+            '"Music is the wine that fills the cup of silence." — Robert Fripp',
+        ],
+        learning: [
+            "📚 Knowledge is an adventure...",
+            '"Live as if you were to die tomorrow. Learn as if you were to live forever." — Mahatma Gandhi',
+            '"Education is the most powerful weapon which you can use to change the world." — Nelson Mandela',
+            '"The more that you read, the more things you will know." — Dr. Seuss',
+            '"An investment in knowledge pays the best interest." — Benjamin Franklin',
+        ],
+        shopping: [
+            "🛍️ Retail therapy incoming...",
+            '"I have enough clothes and shoes. I never want to go shopping again. — said no one ever"',
+            '"Whoever said money can\'t buy happiness didn\'t know where to shop." — Gertrude Stein',
+            '"Shopping is my cardio." — Carrie Bradshaw',
+        ],
+    }
+};
+
+function getPersonalizedPhrases() {
+    const groupType = onboardingData.group_type || 'default';
+    const interests = onboardingData.interests || [];
+    
+    // Start with group-type phrases
+    let phrases = [...(motivationalPhrases[groupType] || motivationalPhrases.default)];
+    
+    // Add interest-specific phrases
+    interests.forEach(interest => {
+        if (motivationalPhrases.interests[interest]) {
+            phrases.push(...motivationalPhrases.interests[interest]);
+        }
+    });
+    
+    // Add some defaults for variety
+    phrases.push(...motivationalPhrases.default.slice(0, 3));
+    
+    // Shuffle the phrases
+    return phrases.sort(() => Math.random() - 0.5);
+}
+
+function startLoadingAnimation(container) {
+    if (!container) return;
+    
+    const phrases = getPersonalizedPhrases();
+    let currentIndex = 0;
+    
+    // Set initial phrase
+    container.innerHTML = `<div class="loading-phrases" id="loading-phrase-container">
+        <div class="loading-spinner"></div>
+        <p class="loading-phrase" id="loading-phrase">${phrases[0]}</p>
+        <p class="loading-subtext">This may take a moment...</p>
+    </div>`;
+    
+    // Rotate phrases every 2.5 seconds
+    loadingPhraseInterval = setInterval(() => {
+        currentIndex = (currentIndex + 1) % phrases.length;
+        const phraseEl = document.getElementById('loading-phrase');
+        if (phraseEl) {
+            phraseEl.style.opacity = '0';
+            setTimeout(() => {
+                phraseEl.textContent = phrases[currentIndex];
+                phraseEl.style.opacity = '1';
+            }, 300);
+        }
+    }, 2500);
+}
+
+function stopLoadingAnimation() {
+    if (loadingPhraseInterval) {
+        clearInterval(loadingPhraseInterval);
+        loadingPhraseInterval = null;
+    }
+}
 
 // ==================== INITIALIZATION ====================
 
@@ -54,7 +271,7 @@ async function initApp() {
     const userId = localStorage.getItem('user_id');
     
     // Check for saved preferences (even without account)
-    const savedPrefs = localStorage.getItem('weekend_planner_preferences');
+    const savedPrefs = localStorage.getItem('activity_planner_preferences');
     
     if (authToken && userId) {
         // Returning user with account - validate and load
@@ -258,7 +475,9 @@ async function loadDashboardRecommendations() {
     const container = document.getElementById('dashboard-digest-items');
     
     if (loading) loading.style.display = 'block';
-    if (container) container.innerHTML = '<div class="loading" id="dashboard-loading">✨ Getting personalized recommendations...</div>';
+    
+    // Start personalized loading animation
+    startLoadingAnimation(container);
     
     try {
         // Build user profile and prompt
@@ -285,6 +504,7 @@ async function loadDashboardRecommendations() {
             if (!fallbackResponse.ok) throw new Error('Backend error');
             const data = await fallbackResponse.json();
             window.currentDigest = data;
+            stopLoadingAnimation();
             if (data.items?.length > 0) {
                 renderDashboardItems(data.items);
             } else {
@@ -295,6 +515,7 @@ async function loadDashboardRecommendations() {
         
         const data = await response.json();
         window.currentDigest = data;
+        stopLoadingAnimation();
         
         if (data.items && data.items.length > 0) {
             renderDashboardItems(data.items);
@@ -310,6 +531,7 @@ async function loadDashboardRecommendations() {
         }
     } catch (error) {
         console.error('Error loading recommendations:', error);
+        stopLoadingAnimation();
         if (container) {
             container.innerHTML = `
                 <div style="text-align: center; padding: 2rem; color: #ef4444;">
@@ -495,16 +717,26 @@ async function signupWithEmail(email, password) {
             authToken = data.token;
             currentUser = { id: data.user_id, email, isGuest: false };
             
-            console.log('[Auth] Signup successful:', email);
+            console.log('[Auth] Signup successful - new account created:', email);
             
-            // Check if we have preferences (coming from onboarding signup prompt)
-            const savedPrefs = localStorage.getItem('weekend_planner_preferences');
-            if (savedPrefs) {
-                savePreferences();
-                showDashboard();
-            } else {
-                showOnboarding();
-            }
+            // NEW ACCOUNT: Always start fresh with onboarding
+            // Clear any previous guest preferences to ensure clean onboarding experience
+            localStorage.removeItem('activity_planner_preferences');
+            onboardingData = {
+                group_type: null,
+                home_location: null,
+                transportation: [],
+                departure_times: { saturday: [], sunday: [] },
+                travel_time_ranges: [],
+                interests: [],
+                energy_level: null,
+                time_commitment: null,
+                budget: null,
+                accessibility: [],
+                avoid: []
+            };
+            
+            showOnboarding();
         } else {
             // Show actual error from server
             alert(data.error || 'Signup failed. Please try again.');
@@ -523,7 +755,7 @@ function simulateLogin(identifier) {
     currentUser = { id: userId, email: identifier };
     
     // Check for saved preferences
-    const savedPrefs = localStorage.getItem('weekend_planner_preferences');
+    const savedPrefs = localStorage.getItem('activity_planner_preferences');
     if (savedPrefs) {
         onboardingData = JSON.parse(savedPrefs);
         showDashboard();
@@ -539,16 +771,26 @@ function simulateSignup(identifier) {
     authToken = 'demo_token';
     currentUser = { id: userId, email: identifier, isGuest: false };
     
-    // Check if we have preferences (coming from onboarding signup prompt)
-    const savedPrefs = localStorage.getItem('weekend_planner_preferences');
-    if (savedPrefs) {
-        // Save to server and go to dashboard
-        savePreferences();
-        showDashboard();
-    } else {
-        // Fresh signup - go to onboarding
-        showOnboarding();
-    }
+    console.log('[Auth] Demo signup - new account created:', identifier);
+    
+    // NEW ACCOUNT: Always start fresh with onboarding
+    // Clear any previous guest preferences to ensure clean onboarding experience
+    localStorage.removeItem('activity_planner_preferences');
+    onboardingData = {
+        group_type: null,
+        home_location: null,
+        transportation: [],
+        departure_times: { saturday: [], sunday: [] },
+        travel_time_ranges: [],
+        interests: [],
+        energy_level: null,
+        time_commitment: null,
+        budget: null,
+        accessibility: [],
+        avoid: []
+    };
+    
+    showOnboarding();
 }
 
 function continueAsGuest() {
@@ -619,9 +861,6 @@ async function signInWithOAuth(provider) {
             console.error('[Auth] Google OAuth error:', error);
             alert('Failed to sign in with Google. Please try again.');
         }
-    } else if (provider === 'apple') {
-        // Apple Sign-In not implemented yet
-        alert('Apple Sign-In coming soon! Please use Google or email.');
     }
 }
 
@@ -883,7 +1122,7 @@ function completeLocationStep() {
     const saveCheckbox = document.getElementById('save-location-checkbox');
     
     if (saveCheckbox?.checked) {
-        localStorage.setItem('weekend_planner_location', JSON.stringify({
+        localStorage.setItem('activity_planner_location', JSON.stringify({
             ...onboardingData.home_location,
             savedAt: new Date().toISOString()
         }));
@@ -895,7 +1134,7 @@ function completeLocationStep() {
 function handleSaveLocationCheckbox(checkbox) {
     if (!checkbox.checked) return;
     
-    const existingLocation = localStorage.getItem('weekend_planner_location');
+    const existingLocation = localStorage.getItem('activity_planner_location');
     
     if (existingLocation) {
         const parsed = JSON.parse(existingLocation);
@@ -1032,7 +1271,7 @@ async function savePreferences() {
     };
     
     // Save to localStorage for demo
-    localStorage.setItem('weekend_planner_preferences', JSON.stringify(preferences));
+    localStorage.setItem('activity_planner_preferences', JSON.stringify(preferences));
     
     // Try to save to backend
     try {
@@ -1538,12 +1777,156 @@ function toggleQuickTravelTime(btn) {
 }
 
 function onQuickAdjustmentChange() {
+    // Check if custom location is selected
+    const locationSelect = document.getElementById('quick-location');
+    const customLocationInput = document.getElementById('quick-location-custom');
+    
+    if (locationSelect && locationSelect.value === 'custom') {
+        // Show custom location input if it doesn't exist
+        if (!customLocationInput) {
+            const inputHtml = `
+                <div id="quick-location-custom-wrapper" class="form-group" style="margin-top: 0.5rem;">
+                    <input type="text" id="quick-location-custom" placeholder="Enter ZIP code or address" style="width: 100%;">
+                    <button class="btn btn-primary" onclick="applyCustomLocation()" style="margin-top: 0.5rem; width: 100%;">Apply Location</button>
+                </div>
+            `;
+            locationSelect.parentElement.insertAdjacentHTML('beforeend', inputHtml);
+        }
+        return; // Don't auto-refresh until they click Apply
+    } else {
+        // Remove custom input if it exists and a different option is selected
+        const wrapper = document.getElementById('quick-location-custom-wrapper');
+        if (wrapper) wrapper.remove();
+    }
+    
+    // Handle current location option
+    if (locationSelect && locationSelect.value === 'current') {
+        getCurrentLocationForQuickAdjust();
+        return; // Will refresh after getting location
+    }
+    
     // Auto-refresh recommendations when adjustments change
     clearTimeout(window.quickAdjustmentTimeout);
     window.quickAdjustmentTimeout = setTimeout(() => {
         gatherQuickAdjustments();
         loadDashboardRecommendations();
     }, 500);
+}
+
+async function applyCustomLocation() {
+    const input = document.getElementById('quick-location-custom');
+    const locationSelect = document.getElementById('quick-location');
+    
+    if (!input || !input.value.trim()) {
+        alert('Please enter a location');
+        return;
+    }
+    
+    const address = input.value.trim();
+    
+    try {
+        // Geocode the address
+        const response = await fetch(`${API_BASE}/geocode?address=${encodeURIComponent(address)}`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data.lat && data.lng) {
+                // Update onboarding data with new location
+                onboardingData.home_location = {
+                    lat: data.lat,
+                    lng: data.lng,
+                    formatted_address: data.formatted_address || address,
+                    input: address,
+                    type: 'manual'
+                };
+                
+                // Update the select to show the custom location
+                locationSelect.innerHTML = `
+                    <option value="">📍 Use saved location</option>
+                    <option value="current">📍 Use current location</option>
+                    <option value="custom">✏️ Enter new location...</option>
+                    <option value="applied" selected>📍 ${data.formatted_address || address}</option>
+                `;
+                
+                // Remove the input wrapper
+                const wrapper = document.getElementById('quick-location-custom-wrapper');
+                if (wrapper) wrapper.remove();
+                
+                // Refresh recommendations
+                gatherQuickAdjustments();
+                loadDashboardRecommendations();
+            } else {
+                alert('Could not find that location. Please try a different address.');
+            }
+        } else {
+            alert('Error looking up location. Please try again.');
+        }
+    } catch (error) {
+        console.error('Geocoding error:', error);
+        alert('Error looking up location. Please try again.');
+    }
+}
+
+function getCurrentLocationForQuickAdjust() {
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser');
+        return;
+    }
+    
+    navigator.geolocation.getCurrentPosition(
+        async (position) => {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            
+            // Reverse geocode to get address
+            try {
+                const response = await fetch(`${API_BASE}/reverse-geocode?lat=${lat}&lng=${lng}`);
+                let formatted_address = 'Current Location';
+                if (response.ok) {
+                    const data = await response.json();
+                    formatted_address = data.formatted_address || 'Current Location';
+                }
+                
+                onboardingData.home_location = {
+                    lat: lat,
+                    lng: lng,
+                    formatted_address: formatted_address,
+                    type: 'geolocation'
+                };
+                
+                // Update the select
+                const locationSelect = document.getElementById('quick-location');
+                if (locationSelect) {
+                    locationSelect.innerHTML = `
+                        <option value="">📍 Use saved location</option>
+                        <option value="current">📍 Use current location</option>
+                        <option value="custom">✏️ Enter new location...</option>
+                        <option value="applied" selected>📍 ${formatted_address}</option>
+                    `;
+                }
+                
+                // Refresh recommendations
+                gatherQuickAdjustments();
+                loadDashboardRecommendations();
+            } catch (error) {
+                console.error('Reverse geocoding error:', error);
+                onboardingData.home_location = {
+                    lat: lat,
+                    lng: lng,
+                    formatted_address: 'Current Location',
+                    type: 'geolocation'
+                };
+                gatherQuickAdjustments();
+                loadDashboardRecommendations();
+            }
+        },
+        (error) => {
+            console.error('Geolocation error:', error);
+            alert('Could not get your current location. Please enter an address instead.');
+            // Reset to saved location
+            const locationSelect = document.getElementById('quick-location');
+            if (locationSelect) locationSelect.value = '';
+        }
+    );
 }
 
 // ==================== RECOMMENDATIONS ====================
@@ -1626,7 +2009,7 @@ function buildRecommendationPrompt() {
         constraints.push(`avoid: ${onboardingData.avoid.join(', ')}`);
     }
     
-    const prompt = `Generate 5 weekend activity recommendations for someone with this profile:
+    const prompt = `Generate 5 activity recommendations for someone with this profile:
 
 **Location:** ${location}
 **Planning for:** ${group}
@@ -1731,29 +2114,69 @@ function createRecommendationCard(item) {
     card.className = 'recommendation-card';
     card.style.cursor = 'pointer';
     
-    const trafficClass = item.travel_time_min < 15 ? 'traffic-light' : 
-                         item.travel_time_min < 30 ? 'traffic-moderate' : 'traffic-heavy';
-    const trafficLabel = item.travel_time_min < 15 ? '🟢 Light' : 
-                         item.travel_time_min < 30 ? '🟡 Moderate' : '🔴 Heavy';
+    // Handle n/a and estimated distances
+    const isDistanceNA = item.distance_is_na || item.distance_miles === null;
+    const isEstimated = item.distance_is_estimated;
     
-    const sourceBadge = item.feed_source ? `<span class="card-source">From ${item.feed_source}</span>` : '';
+    let distanceDisplay, travelTimeDisplay, trafficClass, trafficLabel;
+    
+    if (isDistanceNA) {
+        distanceDisplay = 'n/a';
+        travelTimeDisplay = 'n/a';
+        trafficClass = 'traffic-unknown';
+        trafficLabel = '⚪ Unknown';
+    } else if (isEstimated) {
+        distanceDisplay = `~${item.distance_miles} mi`;
+        travelTimeDisplay = `~${item.travel_time_min} min`;
+        trafficClass = item.travel_time_min < 15 ? 'traffic-light' : 
+                       item.travel_time_min < 30 ? 'traffic-moderate' : 'traffic-heavy';
+        trafficLabel = 'Estimated';
+    } else {
+        distanceDisplay = `${item.distance_miles} mi`;
+        travelTimeDisplay = `${item.travel_time_min} min`;
+        trafficClass = item.travel_time_min < 15 ? 'traffic-light' : 
+                       item.travel_time_min < 30 ? 'traffic-moderate' : 'traffic-heavy';
+        trafficLabel = item.travel_time_min < 15 ? '🟢 Light' : 
+                       item.travel_time_min < 30 ? '🟡 Moderate' : '🔴 Heavy';
+    }
+    
+    // Format event date if available
+    let eventDateDisplay = '';
+    if (item.event_date) {
+        try {
+            const date = new Date(item.event_date);
+            if (!isNaN(date.getTime())) {
+                eventDateDisplay = date.toLocaleDateString('en-US', { 
+                    weekday: 'short', 
+                    month: 'short', 
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                });
+            } else {
+                eventDateDisplay = item.event_date;
+            }
+        } catch {
+            eventDateDisplay = item.event_date;
+        }
+    }
+    
     card.innerHTML = `
         <div class="card-header">
             <div>
                 <div class="card-title">${item.title}</div>
-                <span class="card-category">${item.category}</span>
-                ${sourceBadge}
             </div>
         </div>
+        ${eventDateDisplay ? `<div class="card-event-date">📅 ${eventDateDisplay}</div>` : ''}
         <div class="card-info">
-            <span class="info-badge">📍 ${item.distance_miles} mi</span>
-            <span class="info-badge ${trafficClass}">⏱️ ${item.travel_time_min} min (${trafficLabel})</span>
-            <span class="info-badge">💰 ${item.price_flag}</span>
+            <span class="info-badge">📍 ${distanceDisplay}</span>
+            <span class="info-badge ${trafficClass}">⏱️ ${travelTimeDisplay} ${!isDistanceNA ? `(${trafficLabel})` : ''}</span>
             ${item.kid_friendly ? '<span class="info-badge">👶 Kid-friendly</span>' : ''}
         </div>
-        <div class="card-explanation">${item.explanation}</div>
+        <div class="card-explanation">${(item.explanation || '').replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ').replace(/^[^a-zA-Z0-9]+/, '').replace(/\s+/g, ' ').trim()}</div>
         <div class="card-actions">
             <button class="btn btn-primary" onclick="event.stopPropagation(); showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
+            ${item.event_link ? `<a href="${item.event_link}" target="_blank" rel="noopener" class="btn btn-secondary" onclick="event.stopPropagation();" title="Event Link">🔗</a>` : ''}
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'favorite', event)" title="Favorite">⭐</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'already_been', event)" title="Already been here">✅</button>
         </div>
@@ -1774,13 +2197,33 @@ async function showDetail(recId) {
     const modal = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
     
-    // Build Google Maps search URL - uses search query for accurate results
-    const searchQuery = `${item.title} ${item.address || ''}`.trim();
+    // Build Google Maps search URL - use specific address if available, otherwise title + user's city/state
+    let searchQuery;
+    const address = (item.address || '').trim();
+    const hasSpecificAddress = /^\d+\s/.test(address); // Starts with a street number
+    const userLocation = onboardingData.home_location || {};
+    const locationContext = userLocation.formatted_address || '';
+    const cityStateMatch = locationContext.match(/([A-Za-z\s]+,\s*[A-Z]{2})/);
+    const cityState = cityStateMatch ? cityStateMatch[1] : '';
+
+    if (hasSpecificAddress) {
+        searchQuery = address;
+    } else {
+        if (address) {
+            searchQuery = cityState ? `${address}, ${cityState}` : address;
+        } else {
+            searchQuery = cityState ? `${item.title}, ${cityState}` : item.title;
+        }
+    }
     const googleMapsSearchUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchQuery)}`;
+
+    // Build image search query from title + keywords from event detail + location (for Google/Pexels/Unsplash)
+    const imageSearchQuery = buildImageSearchQuery(item, address, cityState);
     
-    // Get image URL - use photo from API or fallback to Unsplash
-    const imageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title);
-    const hasRealPhoto = !!item.photo_url;
+    // Get image URL - use photo from API, else we'll fetch from image search (Google/Pexels), else category fallback
+    const categoryFallbackUrl = getPlaceImageUrl(item.category, item.title);
+    const genericFallbackUrl = 'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop';
+    const imageUrl = item.photo_url || categoryFallbackUrl;
     
     // Build rating display with link to Google reviews
     const ratingDisplay = item.rating ? `
@@ -1794,13 +2237,93 @@ async function showDetail(recId) {
         </a>
     ` : '';
     
-    // Build description
-    const description = item.description || item.explanation || generatePlaceDescription(item);
+    // Build description - deduplicate time and location info
+    let description = item.description || item.explanation || generatePlaceDescription(item);
+    
+    // Strip HTML tags from description
+    if (description) {
+        description = description.replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ');
+    }
+    let displayAddress = item.address || '';
+    let extractedStreetAddress = '';
+    
+    // Clean up description to remove duplicated info
+    if (description) {
+        // Remove time/date patterns if event_date is already shown
+        if (item.event_date) {
+            description = description
+                // Remove full pattern like "Sun February 8, 2026 - 2:00 pm - 4:00 pm" (anywhere in text)
+                .replace(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?,?\s*(Jan(uary)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?)[a-z]*\.?\s+\d{1,2}(st|nd|rd|th)?,?\s*(\d{4})?\s*[-–—]?\s*\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—]?\s*\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—:]?\s*/gi, '')
+                // Remove day names at start
+                .replace(/^(On\s+)?(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s*/i, '')
+                // Remove date patterns like "Jan 25, 2026 at 10:00 AM" or "January 25, 2026" with optional time range (anywhere)
+                .replace(/(Jan(uary)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?)[a-z]*\.?\s+\d{1,2}(st|nd|rd|th)?,?\s*(\d{4})?\s*[-–—]?\s*(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)?\s*([-–—to]+\s*\d{1,2}(:\d{2})?\s*(am|pm)?)?\s*[-–—:]?\s*/gi, '')
+                // Remove numeric date patterns like "1/25/2026"
+                .replace(/\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—:]?\s*/gi, '')
+                // Remove standalone time like "at 10:00 AM" or "8:00 AM"
+                .replace(/^(at\s+)?\d{1,2}(:\d{2})?\s*(am|pm)\s*[-–—:]?\s*/gi, '')
+                // Remove time ranges like "10:00 AM - 2:00 PM" or "8:00am-10:00am"
+                .replace(/\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—to]+\s*\d{1,2}(:\d{2})?\s*(am|pm)?\s*[-–—:]?\s*/gi, '');
+        }
+        
+        // Extract street address from description (like "40000 Paseo Padre Pkwy")
+        // Pattern: number + street name (+ optional suffix like St, Ave, Pkwy, Blvd, Dr, Rd, Way, Ln, Ct)
+        const streetAddressMatch = description.match(/(\d+\s+[\w\s]+(?:Street|St|Avenue|Ave|Parkway|Pkwy|Boulevard|Blvd|Drive|Dr|Road|Rd|Way|Lane|Ln|Court|Ct|Place|Pl|Circle|Cir)\.?)(?:[,\s]+([A-Za-z\s]+,\s*[A-Z]{2}(?:\s+\d{5})?))?/i);
+        if (streetAddressMatch) {
+            extractedStreetAddress = streetAddressMatch[0].trim();
+            // Remove the street address from description
+            description = description.replace(streetAddressMatch[0], '').trim();
+        }
+        
+        // Remove location/address if already shown in address UI
+        if (item.address) {
+            const addressParts = item.address.split(',').map(p => p.trim()).filter(p => p.length > 2);
+            addressParts.forEach(part => {
+                // Escape special regex characters
+                const escaped = part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                // Remove the address part from description (case insensitive)
+                description = description.replace(new RegExp(`(at\\s+|@\\s*|Location:\\s*|Address:\\s*)?${escaped}[,.]?\\s*`, 'gi'), '');
+            });
+            // Also try to remove the full address
+            const fullAddressEscaped = item.address.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            description = description.replace(new RegExp(`(at\\s+|@\\s*|Location:\\s*|Address:\\s*)?${fullAddressEscaped}[,.]?\\s*`, 'gi'), '');
+        }
+        
+        // Clean up any leftover artifacts
+        description = description
+            .replace(/^[^a-zA-Z0-9]+/, '')           // Remove any non-alphanumeric at start
+            .replace(/[^a-zA-Z0-9.!?]+$/, '')       // Remove non-alphanumeric at end (keep sentence endings)
+            .replace(/\s+/g, ' ')                    // Normalize whitespace
+            .trim();
+        
+        // If description is effectively empty or too short after cleanup, set to empty string
+        if (!description || description.length < 5) {
+            description = '';
+        }
+    }
+    
+    // Build merged address display
+    // If we have a venue name (no street number) and extracted a street address, combine them
+    let hasTwoLineAddress = false;
+    if (displayAddress && extractedStreetAddress) {
+        // Check if displayAddress looks like a venue name (no street number at start)
+        const hasStreetNumber = /^\d+\s/.test(displayAddress);
+        if (!hasStreetNumber) {
+            // displayAddress is likely a venue name, append street address below
+            displayAddress = `<span class="detail-address-venue">${displayAddress}</span><span class="detail-address-street">${extractedStreetAddress}</span>`;
+            hasTwoLineAddress = true;
+        }
+    } else if (extractedStreetAddress && !displayAddress) {
+        displayAddress = extractedStreetAddress;
+    }
     
     content.innerHTML = `
         <a href="${googleMapsSearchUrl}" target="_blank" rel="noopener" class="detail-image-link">
             <div class="detail-image-container">
-                <img src="${imageUrl}" alt="${item.title}" class="detail-image" onerror="this.src='https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop'">
+                <img id="detail-modal-image" src="${imageUrl}" alt="${item.title}" class="detail-image" 
+                    data-category-fallback="${categoryFallbackUrl}" 
+                    data-generic-fallback="${genericFallbackUrl}"
+                    onerror="handleDetailImageError(this)">
                 <div class="image-overlay">
                     <span class="view-on-google">View on Google Maps ↗</span>
                 </div>
@@ -1810,42 +2333,72 @@ async function showDetail(recId) {
             <h2 class="detail-title">${item.title}</h2>
             ${ratingDisplay}
         </div>
+        ${item.event_date ? `
+        <div class="detail-event-date">${(() => {
+            try {
+                const date = new Date(item.event_date);
+                if (!isNaN(date.getTime())) {
+                    return date.toLocaleDateString('en-US', { 
+                        weekday: 'short', 
+                        month: 'short', 
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit'
+                    });
+                }
+                return item.event_date;
+            } catch { return item.event_date; }
+        })()}</div>
+        ` : ''}
+        ${description ? `
         <div class="detail-description">
             <p>${description}</p>
         </div>
-        ${item.address ? `
+        ` : ''}
+        ${item.event_link ? `
+        <a href="${item.event_link}" target="_blank" rel="noopener" class="detail-event-link">View event →</a>
+        ` : ''}
+        ${displayAddress ? `
         <a href="${googleMapsSearchUrl}" target="_blank" rel="noopener" class="detail-address-link">
-            <div class="detail-address">📍 ${item.address} <span class="google-link-icon">↗</span></div>
+            <div class="detail-address">
+                <span class="detail-address-content">${displayAddress}</span>
+                <span class="google-link-icon">↗</span>
+            </div>
         </a>
         ` : ''}
         <div class="detail-info">
             <div class="detail-info-item">
-                <div class="detail-info-label">Distance</div>
-                <div class="detail-info-value">${item.distance_miles} miles</div>
+                <span class="detail-info-label">Distance</span>
+                <span class="detail-info-value">${item.distance_is_na || item.distance_miles === null ? 'n/a' : (item.distance_is_estimated ? `~${item.distance_miles} mi` : `${item.distance_miles} mi`)}</span>
             </div>
             <div class="detail-info-item">
-                <div class="detail-info-label">Travel Time</div>
-                <div class="detail-info-value">${item.travel_time_min} min</div>
+                <span class="detail-info-label">Travel</span>
+                <span class="detail-info-value">${item.distance_is_na || item.travel_time_min === null ? 'n/a' : (item.distance_is_estimated ? `~${item.travel_time_min} min` : `${item.travel_time_min} min`)}</span>
             </div>
             <div class="detail-info-item">
-                <div class="detail-info-label">Price</div>
-                <div class="detail-info-value">${item.price_flag}</div>
+                <span class="detail-info-label">Price</span>
+                <span class="detail-info-value">${(() => {
+                    const price = (item.price_flag || '').toLowerCase().trim();
+                    if (price === 'free') return 'Free';
+                    if (price === '$$' || price === '$$$' || price === '$$$$') return item.price_flag;
+                    return 'n/a';
+                })()}</span>
             </div>
             <div class="detail-info-item">
-                <div class="detail-info-label">Type</div>
-                <div class="detail-info-value">${item.indoor_outdoor}</div>
+                <span class="detail-info-label">Setting</span>
+                <span class="detail-info-value">${item.indoor_outdoor || 'n/a'}</span>
             </div>
             ${item.kid_friendly ? `
             <div class="detail-info-item">
-                <div class="detail-info-label">Family</div>
-                <div class="detail-info-value">👶 Kid-friendly</div>
+                <span class="detail-info-label">Family</span>
+                <span class="detail-info-value">Kid-friendly</span>
             </div>
             ` : ''}
         </div>
-        ${item.best_time ? `<div class="detail-best-time">🕐 Best time to visit: ${item.best_time}</div>` : ''}
+        ${item.best_time ? `<div class="detail-best-time">Best time to visit: ${item.best_time}</div>` : ''}
         <div class="time-slots">
             <h3>Add to Calendar</h3>
-            <p class="time-slots-hint">Select a time (optional - defaults to all day)</p>
+            <p class="time-slots-hint">Select a time slot</p>
             <div class="slot-buttons">
                 <button class="slot-btn" onclick="selectSlot('SAT_AM')">Saturday Morning</button>
                 <button class="slot-btn" onclick="selectSlot('SAT_PM')">Saturday Afternoon</button>
@@ -1853,13 +2406,73 @@ async function showDetail(recId) {
                 <button class="slot-btn" onclick="selectSlot('SUN_PM')">Sunday Afternoon</button>
             </div>
         </div>
-        <div style="margin-top: 1.5rem;">
+        <div style="margin-top: 1rem; padding-top: 1rem;">
             <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')">Add to Calendar</button>
         </div>
     `;
     
     modal.classList.add('active');
     window.selectedSlot = null;
+
+    // If no photo from source, fetch location-specific image from Google/Pexels and update when ready
+    if (!item.photo_url && imageSearchQuery) {
+        fetch(`${API_BASE}/image-search?q=${encodeURIComponent(imageSearchQuery)}`)
+            .then(r => r.json())
+            .then(data => {
+                const img = document.getElementById('detail-modal-image');
+                if (img && data.url) {
+                    img.src = data.url;
+                    img.onerror = () => handleDetailImageError(img);
+                }
+            })
+            .catch(() => {});
+    }
+}
+
+function handleDetailImageError(imgEl) {
+    if (!imgEl) return;
+    const categoryFallback = imgEl.dataset.categoryFallback;
+    const genericFallback = imgEl.dataset.genericFallback;
+    if (imgEl.src !== categoryFallback && categoryFallback) {
+        imgEl.src = categoryFallback;
+        imgEl.onerror = () => { if (genericFallback) imgEl.src = genericFallback; };
+    } else if (genericFallback) {
+        imgEl.src = genericFallback;
+        imgEl.onerror = null;
+    }
+}
+
+function buildImageSearchQuery(item, address, cityState) {
+    // Extract keywords from title and event detail for better image search (Google/Pexels/Unsplash)
+    const title = (item.title || '').trim();
+    const rawDesc = (item.description || item.explanation || '').trim();
+    const desc = rawDesc.replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ');
+    const category = (item.category || '').trim();
+    const bestTime = (item.best_time || '').trim();
+
+    const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'it', 'its', 'we', 'you', 'they', 'our', 'your', 'their', 'join', 'us', 'get', 'see', 'come', 'visit', 'enjoy', 'explore', 'discover', 'experience', 'local', 'free', 'event', 'events']);
+    const extractKeywords = (text, maxWords = 8) => {
+        if (!text || text.length < 3) return [];
+        const words = text.toLowerCase()
+            .replace(/[^\w\s'-]/g, ' ')
+            .split(/\s+/)
+            .filter(w => w.length >= 3 && !stopWords.has(w) && !/^\d+$/.test(w));
+        const seen = new Set();
+        return words.filter(w => {
+            if (seen.has(w)) return false;
+            seen.add(w);
+            return true;
+        }).slice(0, maxWords);
+    };
+
+    const titleKeywords = extractKeywords(title, 5);
+    const descKeywords = extractKeywords(desc, 6);
+    const categoryKeywords = category ? extractKeywords(category, 2) : [];
+    const bestTimeKeywords = bestTime ? extractKeywords(bestTime, 2) : []; // e.g. "sunset", "morning"
+    const combined = [...new Set([...titleKeywords, ...descKeywords, ...categoryKeywords, ...bestTimeKeywords])].join(' ');
+    const location = [address, cityState].filter(Boolean).join(' ').trim();
+
+    return [title, combined, location].filter(Boolean).join(' ').trim() || title;
 }
 
 function getPlaceImageUrl(category, title) {
@@ -1905,15 +2518,15 @@ function getPlaceImageUrl(category, title) {
 
 function generatePlaceDescription(item) {
     const descriptions = {
-        'parks': `Escape to nature at ${item.title}. This beautiful outdoor space offers a perfect retreat from the busy city life. Whether you're looking to take a leisurely stroll, have a picnic, or simply relax surrounded by greenery, this is the ideal spot for your weekend.`,
+        'parks': `Escape to nature at ${item.title}. This beautiful outdoor space offers a perfect retreat from the busy city life. Whether you're looking to take a leisurely stroll, have a picnic, or simply relax surrounded by greenery, this is the ideal spot for a relaxing day.`,
         'museums': `Discover art, history, and culture at ${item.title}. This museum offers fascinating exhibits that will engage visitors of all ages. Plan to spend a few hours exploring the collections and learning something new.`,
         'food': `Treat yourself to a delicious dining experience at ${item.title}. Known for its excellent cuisine and welcoming atmosphere, this spot is perfect for a memorable meal with family or friends.`,
-        'attractions': `Experience the excitement of ${item.title}. This popular destination offers unique experiences and entertainment that make it a must-visit spot for your weekend adventure.`,
+        'attractions': `Experience the excitement of ${item.title}. This popular destination offers unique experiences and entertainment that make it a must-visit spot for your next adventure.`,
         'entertainment': `Get ready for fun at ${item.title}! This entertainment venue promises an exciting time filled with memorable experiences. Perfect for creating lasting memories with your loved ones.`,
         'shopping': `Explore the shops and boutiques at ${item.title}. From unique finds to popular brands, this destination offers a great shopping experience for everyone.`
     };
     
-    return descriptions[item.category] || `Visit ${item.title} for a wonderful weekend experience. ${item.explanation || ''}`;
+    return descriptions[item.category] || `Visit ${item.title} for a wonderful experience. ${item.explanation || ''}`;
 }
 
 function selectSlot(slot) {
@@ -2369,6 +2982,8 @@ window.saveNotificationSettings = saveNotificationSettings;
 window.selectQuickGroup = selectQuickGroup;
 window.toggleQuickTravelTime = toggleQuickTravelTime;
 window.onQuickAdjustmentChange = onQuickAdjustmentChange;
+window.applyCustomLocation = applyCustomLocation;
+window.getCurrentLocationForQuickAdjust = getCurrentLocationForQuickAdjust;
 window.showSignupPrompt = showSignupPrompt;
 window.closeSignupPrompt = closeSignupPrompt;
 window.skipSignupAndContinue = skipSignupAndContinue;

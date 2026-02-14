@@ -1,6 +1,6 @@
 """
-SQLite persistence for Weekend Planner.
-Replaces in-memory dicts with a single weekend_planner.db file.
+SQLite persistence for Activity Planner.
+Replaces in-memory dicts with a single activity_planner.db file.
 """
 
 import os
@@ -10,7 +10,7 @@ from datetime import datetime
 from contextlib import contextmanager
 
 # Database file path (default: same directory as this file)
-DB_PATH = os.environ.get('DATABASE_URL', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'weekend_planner.db'))
+DB_PATH = os.environ.get('DATABASE_URL', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'activity_planner.db'))
 
 # Thread-local connection would be better for Flask; for single-threaded dev we use one connection per request
 def get_conn():
@@ -408,3 +408,32 @@ def list_users_by_user_id():
         }
         for row in rows
     }
+
+
+def get_all_users_with_preferences():
+    """Get all users who have preferences set (for sending digest emails)."""
+    with get_conn() as c:
+        rows = c.execute("""
+            SELECT u.user_id, u.identifier, u.identifier_type, u.name, u.picture, 
+                   u.email_digest, p.prefs_json
+            FROM users u
+            INNER JOIN preferences p ON u.user_id = p.user_id
+            WHERE u.identifier_type IN ('email', 'google')
+              AND (u.email_digest IS NULL OR u.email_digest = 1)
+        """).fetchall()
+    
+    result = []
+    for row in rows:
+        try:
+            prefs = json.loads(row["prefs_json"]) if row["prefs_json"] else {}
+        except (json.JSONDecodeError, TypeError):
+            prefs = {}
+        
+        result.append({
+            "id": row["user_id"],
+            "email": row["identifier"],
+            "name": row["name"] or "",
+            "preferences": prefs,
+        })
+    
+    return result

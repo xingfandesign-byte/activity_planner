@@ -5,4 +5,9 @@
 !.gitignore
 
 # SQLite database (local data)
-backend/weekend_planner.db
+backend/activity_planner.db
+backend/*.db
+
+# Python
+backend/venv/
+backend/__pycache__/

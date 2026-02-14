@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "Testing Weekend Planner Backend..."
+echo "Testing Activity Planner Backend..."
 echo ""
 
 echo "1. Testing health endpoint..."

@@ -1,11 +1,11 @@
 # Quick Start Guide
 
-## Running the Weekend Planner
+## Running the Activity Planner
 
 ### Option 1: Use the startup script (Recommended)
 
 ```bash
-cd weekend-planner
+cd activity-planner
 ./run.sh
 ```
 
@@ -18,14 +18,14 @@ This will:
 
 **Terminal 1 - Backend:**
 ```bash
-cd weekend-planner/backend
+cd activity-planner/backend
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 python app.py
 ```
 
 **Terminal 2 - Frontend:**
 ```bash
-cd weekend-planner/frontend
+cd activity-planner/frontend
 python3 -m http.server 8000
 ```
 
@@ -93,7 +93,7 @@ export SMTP_HOST="smtp.gmail.com"
 export SMTP_PORT="587"
 export SMTP_USER="your-email@gmail.com"
 export SMTP_PASSWORD="your-app-password"
-export EMAIL_FROM="Weekend Planner <your-email@gmail.com>"
+export EMAIL_FROM="Activity Planner <your-email@gmail.com>"
 export FRONTEND_URL="http://localhost:8000"
 ```
 
@@ -112,7 +112,7 @@ Recommendations can be complemented with local events and news. Set any of:
 - **LOCAL_FEED_URLS** – Comma-separated RSS/Atom URLs (e.g. Axios, city event calendars). **LOCAL_FEED_LABELS** – Optional labels (same order).
 - **FACEBOOK_ACCESS_TOKEN** – Optional; Facebook Graph API token for events near the user.
 - **EVENTBRITE_TOKEN** – Optional; [Eventbrite API](https://www.eventbrite.com/platform/api) token.
-- **MANUS_API_KEY** – Optional; [Manus API](https://open.manus.ai/docs) key. User preferences are converted to a prompt and sent to Manus; the agent returns personalized local weekend recommendations (events, places, activities), which are merged with Google Places and other feeds.
+- **MANUS_API_KEY** – Optional; [Manus API](https://open.manus.ai/docs) key. User preferences are converted to a prompt and sent to Manus; the agent returns personalized local activity recommendations (events, places, activities), which are merged with Google Places and other feeds.
 
 Example:
 
@@ -121,6 +121,16 @@ export MANUS_API_KEY="your-manus-api-key"
 ```
 
 To see which sources are configured: `GET /v1/feeds/config` (returns enabled sources, no secrets).
+
+### Detail page images (location-specific)
+
+The detail page shows images that match the event/location using keywords from the title and event detail. Configure one of (tried in order):
+
+- **GOOGLE_CSE_API_KEY** + **GOOGLE_CSE_CX** – [Google Custom Search](https://programmablesearchengine.google.com/) with Image search enabled (100 free queries/day).
+- **PEXELS_API_KEY** – [Pexels API](https://www.pexels.com/api/) (free, 200 req/hr).
+- **UNSPLASH_ACCESS_KEY** – [Unsplash API](https://unsplash.com/developers) (free, 50 req/hr).
+
+If none are set, the app uses category-based placeholder images.
 
 ## First Time Setup
 
@@ -131,7 +141,7 @@ To see which sources are configured: `GET /v1/feeds/config` (returns enabled sou
    - Set notification time
 
 2. **View Recommendations**:
-   - Browse the weekend digest
+   - Browse the activity digest
    - Each card shows distance, travel time, price, and details
 
 3. **Add to Calendar**:
@@ -146,7 +156,7 @@ To see which sources are configured: `GET /v1/feeds/config` (returns enabled sou
 ## Features Implemented
 
 ✅ User onboarding and preferences
-✅ Weekend digest with 8 personalized recommendations
+✅ Activity digest with 8 personalized recommendations
 ✅ Deduplication (prevents showing places you've visited)
 ✅ Calendar event creation (Google Calendar links)
 ✅ Feedback system (like, save, already been)
