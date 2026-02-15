@@ -43,7 +43,7 @@ def verify_password(password, stored_hash):
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 # CORS: allow frontend origin for OAuth (credentials required for session cookie)
-_cors_origins = ['http://localhost:8000']
+_cors_origins = ['http://localhost:8000', 'http://0.0.0.0:8000']
 _furl = os.environ.get('FRONTEND_URL', '').rstrip('/')
 if _furl:
     _cors_origins.append(_furl)
