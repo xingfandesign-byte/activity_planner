@@ -14,6 +14,7 @@ import json
 import os
 import requests
 import hashlib
+import hmac
 import secrets
 import smtplib
 from email.mime.text import MIMEText
@@ -42,7 +43,7 @@ def verify_password(password, stored_hash):
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 # CORS: allow frontend origin for OAuth (credentials required for session cookie)
-_cors_origins = ['http://localhost:8000']
+_cors_origins = ['http://localhost:8000', 'http://0.0.0.0:8000']
 _furl = os.environ.get('FRONTEND_URL', '').rstrip('/')
 if _furl:
     _cors_origins.append(_furl)
@@ -2185,11 +2186,11 @@ def get_google_auth_url():
     if not GOOGLE_CLIENT_ID:
         return jsonify({"error": "Google OAuth not configured"}), 501
     
-    # Generate a state token for CSRF protection
-    import secrets
-    state = secrets.token_urlsafe(32)
-    session['oauth_state'] = state
-    
+    # Generate a signed state token for CSRF protection (no session dependency)
+    nonce = secrets.token_urlsafe(32)
+    sig = hmac.new(app.secret_key.encode(), f"auth:{nonce}".encode(), hashlib.sha256).hexdigest()[:16]
+    state = f"auth:{nonce}:{sig}"
+
     # Build the Google OAuth URL
     params = {
         'client_id': GOOGLE_CLIENT_ID,
@@ -2228,10 +2229,19 @@ def google_callback():
     
     code = request.args.get('code')
     state = request.args.get('state')
-    
-    # Verify state token
-    stored_state = session.get('oauth_state')
-    if not stored_state or state != stored_state:
+
+    # Verify signed state token (no session dependency)
+    state_valid = False
+    oauth_type = 'auth'
+    if state and ':' in state:
+        parts = state.split(':', 2)
+        if len(parts) == 3:
+            oauth_type = parts[0]
+            nonce = parts[1]
+            sig = parts[2]
+            expected_sig = hmac.new(app.secret_key.encode(), f"{oauth_type}:{nonce}".encode(), hashlib.sha256).hexdigest()[:16]
+            state_valid = hmac.compare_digest(sig, expected_sig)
+    if not state_valid:
         return f'''
         <html><body>
         <script>
@@ -2240,7 +2250,7 @@ def google_callback():
         </script>
         </body></html>
         '''
-    
+
     # Exchange code for tokens
     token_url = 'https://oauth2.googleapis.com/token'
     token_data = {
@@ -2266,7 +2276,6 @@ def google_callback():
             '''
         
         access_token = tokens.get('access_token')
-        oauth_type = session.get('oauth_type', 'auth')
         
         # Get user info from Google
         userinfo_response = requests.get(
@@ -2368,10 +2377,10 @@ def get_google_calendar_auth_url():
     if not GOOGLE_CLIENT_ID:
         return jsonify({"error": "Google OAuth not configured"}), 501
     
-    state = secrets.token_urlsafe(32)
-    session['oauth_state'] = state
-    session['oauth_type'] = 'calendar'
-    
+    nonce = secrets.token_urlsafe(32)
+    sig = hmac.new(app.secret_key.encode(), f"calendar:{nonce}".encode(), hashlib.sha256).hexdigest()[:16]
+    state = f"calendar:{nonce}:{sig}"
+
     # Include calendar scope
     scopes = 'openid email profile https://www.googleapis.com/auth/calendar.events'
     
