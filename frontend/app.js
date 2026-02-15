@@ -500,7 +500,9 @@ async function loadDashboardRecommendations() {
         if (!response.ok) {
             // Fall back to regular digest if AI endpoint fails
             console.log('AI recommendations unavailable, falling back to digest');
-            const fallbackResponse = await fetch(`${API_BASE}/digest`);
+            const fallbackResponse = await fetch(`${API_BASE}/digest`, {
+                headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {}
+            });
             if (!fallbackResponse.ok) throw new Error('Backend error');
             const data = await fallbackResponse.json();
             window.currentDigest = data;
@@ -814,8 +816,8 @@ async function signInWithOAuth(provider) {
                 return;
             }
             
-            // Get the Google auth URL
-            const urlResponse = await fetch(`${API_BASE}/auth/google/url`);
+            // Get the Google auth URL (credentials required so session cookie is stored for OAuth callback)
+            const urlResponse = await fetch(`${API_BASE}/auth/google/url`, { credentials: 'include' });
             const urlData = await urlResponse.json();
             
             if (urlData.url) {
@@ -2648,7 +2650,7 @@ function showCalendarAuthPrompt(recId, item) {
 async function connectGoogleCalendar(recId) {
     try {
         // Get Google OAuth URL with calendar scope
-        const response = await fetch(`${API_BASE}/auth/google/calendar/url`);
+        const response = await fetch(`${API_BASE}/auth/google/calendar/url`, { credentials: 'include' });
         const data = await response.json();
         
         if (data.url) {

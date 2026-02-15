@@ -41,7 +41,12 @@ def verify_password(password, stored_hash):
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-CORS(app, supports_credentials=True)
+# CORS: allow frontend origin for OAuth (credentials required for session cookie)
+_cors_origins = ['http://localhost:8000']
+_furl = os.environ.get('FRONTEND_URL', '').rstrip('/')
+if _furl:
+    _cors_origins.append(_furl)
+CORS(app, supports_credentials=True, origins=_cors_origins)
 
 # Google Places API Configuration
 GOOGLE_PLACES_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '')
@@ -607,7 +612,20 @@ def filter_places(prefs, user_id, user_lat=None, user_lng=None):
                 result.append(place)
             if len(result) >= 8:
                 break
-    
+
+    # Last resort: return closest places regardless of radius/category filters
+    if len(result) == 0:
+        print(f"[DEBUG] No results after relaxed filter, returning closest places")
+        all_places = []
+        for place in MOCK_PLACES:
+            if use_user_location:
+                place = _place_with_distance_from_user(place, user_lat, user_lng)
+            if should_dedup(place['place_id'], user_id, prefs):
+                continue
+            all_places.append(place)
+        all_places.sort(key=lambda x: x['distance_miles'])
+        result = all_places[:8]
+
     print(f"[DEBUG] Final result count: {len(result)}")
     return result
 
