@@ -2202,7 +2202,7 @@ def get_google_auth_url():
         'prompt': 'consent'
     }
     
-    auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + '&'.join(f'{k}={v}' for k, v in params.items())
+    auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + '&'.join(f'{k}={requests.utils.quote(str(v))}' for k, v in params.items())
     
     return jsonify({
         "url": auth_url,
