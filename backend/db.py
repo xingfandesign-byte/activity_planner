@@ -118,6 +118,7 @@ def get_user_by_identifier(identifier):
         "user_id": row["user_id"],
         "email": row["identifier"] if row["identifier_type"] in ("email", "google") else None,
         "phone": row["identifier"] if row["identifier_type"] == "phone" else None,
+        "identifier_type": row["identifier_type"],
         "password": row["password_hash"],
         "created_at": row["created_at"],
         "email_digest": bool(row["email_digest"]),
@@ -140,6 +141,7 @@ def get_user_by_user_id(user_id):
         "user_id": row["user_id"],
         "email": row["identifier"] if row["identifier_type"] in ("email", "google") else None,
         "phone": row["identifier"] if row["identifier_type"] == "phone" else None,
+        "identifier_type": row["identifier_type"],
         "password": row["password_hash"],
         "created_at": row["created_at"],
         "email_digest": bool(row["email_digest"]),
@@ -162,6 +164,15 @@ def create_user_phone(phone, user_id):
         c.execute(
             "INSERT INTO users (user_id, identifier, identifier_type, password_hash, created_at, email_digest) VALUES (?, ?, 'phone', NULL, ?, 0)",
             (user_id, phone, datetime.now().isoformat())
+        )
+
+
+def update_user_google_link(user_id, name=None, picture=None):
+    """Update an existing email account with Google profile info and mark as verified."""
+    with get_conn() as c:
+        c.execute(
+            "UPDATE users SET name = ?, picture = ?, email_verified = 1 WHERE user_id = ?",
+            (name or "", picture or "", user_id)
         )
 
 

@@ -1940,6 +1940,8 @@ def login():
     user = db.get_user_by_identifier(email.lower())
     if not user:
         return jsonify({"error": "Invalid email or password"}), 401
+    if user.get('identifier_type') == 'google' and not user.get('password'):
+        return jsonify({"error": "This account uses Google sign-in. Please log in with Google, or use 'Forgot password' to set a password."}), 401
     if not verify_password(password, user.get('password', '')):
         return jsonify({"error": "Invalid email or password"}), 401
     
@@ -2279,10 +2281,14 @@ def google_callback():
         name = userinfo.get('name', '')
         picture = userinfo.get('picture', '')
         
-        # Check if user exists, create if not
-        user_id = f"google_{google_id}"
-        
-        db.upsert_user_google(user_id, email, name=name, picture=picture)
+        # Check if an account with this email already exists (e.g. from email signup)
+        existing_user = db.get_user_by_identifier(email.lower())
+        if existing_user:
+            user_id = existing_user['user_id']
+            db.update_user_google_link(user_id, name, picture)
+        else:
+            user_id = f"google_{google_id}"
+            db.upsert_user_google(user_id, email, name=name, picture=picture)
         print(f"[AUTH] Google user logged in: {email}")
         
         # Generate auth token
