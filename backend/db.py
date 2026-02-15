@@ -178,7 +178,7 @@ def upsert_user_google(user_id, email, name=None, picture=None):
         else:
             c.execute(
                 "INSERT INTO users (user_id, identifier, identifier_type, password_hash, created_at, email_digest, name, picture, email_verified) VALUES (?, ?, 'google', NULL, ?, 1, ?, ?, 1)",
-                (user_id, email.lower(), now, name or "", picture or "", 1)
+                (user_id, email.lower(), now, name or "", picture or "")
             )
 
 
