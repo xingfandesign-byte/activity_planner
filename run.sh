@@ -31,7 +31,12 @@ if [ ! -f "venv/.installed" ]; then
 fi
 
 # Start backend in background
-python app.py &
+if [ "$1" = "--prod" ]; then
+    echo "   (production mode with gunicorn)"
+    gunicorn app:app --bind 0.0.0.0:5001 &
+else
+    python app.py &
+fi
 BACKEND_PID=$!
 echo "✅ Backend started (PID: $BACKEND_PID)"
 echo "   API available at http://localhost:5001"
