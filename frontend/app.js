@@ -806,33 +806,48 @@ async function signInWithOAuth(provider) {
     if (provider === 'google') {
         try {
             // Check if Google OAuth is configured
-            const statusResponse = await fetch(`${API_BASE}/auth/google/status`);
+            const statusResponse = await fetch(`${API_BASE}/auth/google/status`, { credentials: 'include' });
+            if (!statusResponse.ok) {
+                console.error('[Auth] Google status check failed:', statusResponse.status, statusResponse.statusText);
+                alert('Failed to sign in with Google. Server returned ' + statusResponse.status + '.');
+                return;
+            }
             const statusData = await statusResponse.json();
-            
+
             if (!statusData.configured) {
                 // Fall back to demo mode if not configured
                 alert('Google OAuth not configured. Using demo mode.');
                 simulateLogin('demo@google.com');
                 return;
             }
-            
-            // Get the Google auth URL (credentials required so session cookie is stored for OAuth callback)
+
+            // Get the Google auth URL
             const urlResponse = await fetch(`${API_BASE}/auth/google/url`, { credentials: 'include' });
+            if (!urlResponse.ok) {
+                console.error('[Auth] Google URL fetch failed:', urlResponse.status, urlResponse.statusText);
+                alert('Failed to sign in with Google. Server returned ' + urlResponse.status + '.');
+                return;
+            }
             const urlData = await urlResponse.json();
-            
+
             if (urlData.url) {
                 // Open Google OAuth in a popup
                 const width = 500;
                 const height = 600;
                 const left = (window.innerWidth - width) / 2 + window.screenX;
                 const top = (window.innerHeight - height) / 2 + window.screenY;
-                
+
                 const popup = window.open(
                     urlData.url,
                     'Google Sign In',
                     `width=${width},height=${height},left=${left},top=${top},popup=yes`
                 );
-                
+
+                if (!popup || popup.closed) {
+                    alert('Popup was blocked. Please allow popups for this site and try again.');
+                    return;
+                }
+
                 // Listen for message from popup
                 window.addEventListener('message', function handleOAuthMessage(event) {
                     if (event.data.type === 'oauth_success') {
@@ -845,23 +860,26 @@ async function signInWithOAuth(provider) {
                         localStorage.setItem('user_name', currentUser.name || '');
                         localStorage.setItem('user_picture', currentUser.picture || '');
                         localStorage.setItem('auth_provider', 'google');
-                        
+
                         console.log('[Auth] Google sign-in successful:', currentUser.email);
-                        
+
                         // Check if user has preferences
                         checkUserPreferencesAndRedirect();
-                        
+
                         window.removeEventListener('message', handleOAuthMessage);
                     } else if (event.data.type === 'oauth_error') {
                         console.error('[Auth] Google sign-in error:', event.data.error);
-                        alert('Sign-in failed: ' + event.data.error);
+                        alert('Sign-in failed: ' + (event.data.error || 'Unknown error'));
                         window.removeEventListener('message', handleOAuthMessage);
                     }
                 });
+            } else {
+                console.error('[Auth] No URL returned from server:', urlData);
+                alert('Failed to sign in with Google. Server did not return an auth URL.');
             }
         } catch (error) {
             console.error('[Auth] Google OAuth error:', error);
-            alert('Failed to sign in with Google. Please try again.');
+            alert('Failed to sign in with Google: ' + error.message);
         }
     }
 }
