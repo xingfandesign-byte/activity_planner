@@ -500,7 +500,9 @@ async function loadDashboardRecommendations() {
         if (!response.ok) {
             // Fall back to regular digest if AI endpoint fails
             console.log('AI recommendations unavailable, falling back to digest');
-            const fallbackResponse = await fetch(`${API_BASE}/digest`);
+            const fallbackResponse = await fetch(`${API_BASE}/digest`, {
+                headers: authToken ? { 'Authorization': `Bearer ${authToken}` } : {}
+            });
             if (!fallbackResponse.ok) throw new Error('Backend error');
             const data = await fallbackResponse.json();
             window.currentDigest = data;

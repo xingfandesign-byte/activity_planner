@@ -612,7 +612,20 @@ def filter_places(prefs, user_id, user_lat=None, user_lng=None):
                 result.append(place)
             if len(result) >= 8:
                 break
-    
+
+    # Last resort: return closest places regardless of radius/category filters
+    if len(result) == 0:
+        print(f"[DEBUG] No results after relaxed filter, returning closest places")
+        all_places = []
+        for place in MOCK_PLACES:
+            if use_user_location:
+                place = _place_with_distance_from_user(place, user_lat, user_lng)
+            if should_dedup(place['place_id'], user_id, prefs):
+                continue
+            all_places.append(place)
+        all_places.sort(key=lambda x: x['distance_miles'])
+        result = all_places[:8]
+
     print(f"[DEBUG] Final result count: {len(result)}")
     return result
 
