@@ -664,6 +664,7 @@ def get_recommendations(user_id, prefs):
         
         # Filter by user preferences
         filtered_items = []
+        print(f"[RECOMMENDATIONS] Filtering {len(all_items)} items, max_travel={get_max_travel_time(travel_time_ranges)}, max_radius={get_max_radius_miles(travel_time_ranges)}")
         for item in all_items:
             # Apply travel time filter
             travel_time = item.get('travel_time_min')
@@ -686,6 +687,8 @@ def get_recommendations(user_id, prefs):
             
             filtered_items.append(item)
         
+        print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
+        
         # Rank by mix of places vs events (aim for ~60% places, ~40% events)
         places = [item for item in filtered_items if item.get('type') == 'place']
         events = [item for item in filtered_items if item.get('type') == 'event']
@@ -696,8 +699,8 @@ def get_recommendations(user_id, prefs):
         events_target = min(3, len(events))  # Up to 3 events
         
         # Sort by rating/relevance
-        places.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles', 100))), reverse=True)
-        events.sort(key=lambda x: -(x.get('distance_miles', 100)))  # Events by proximity
+        places.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
+        events.sort(key=lambda x: -(x.get('distance_miles') or 100))  # Events by proximity
         
         final_items.extend(places[:places_target])
         final_items.extend(events[:events_target])
@@ -706,7 +709,7 @@ def get_recommendations(user_id, prefs):
         remaining_needed = 8 - len(final_items)
         if remaining_needed > 0:
             remaining = [item for item in filtered_items if item not in final_items]
-            remaining.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles', 100))), reverse=True)
+            remaining.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
             final_items.extend(remaining[:remaining_needed])
         
         # Cache successful results
@@ -1015,7 +1018,9 @@ def get_digest():
         return jsonify(response_data)
         
     except Exception as e:
+        import traceback
         print(f"[DIGEST] Error in recommendation engine: {e}")
+        traceback.print_exc()
         # Emergency fallback - return empty result with error info
         return jsonify({
             "week": week,
