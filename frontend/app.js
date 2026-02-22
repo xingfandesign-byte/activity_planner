@@ -520,13 +520,26 @@ async function loadDashboardRecommendations() {
         stopLoadingAnimation();
         
         if (data.items && data.items.length > 0) {
-            renderDashboardItems(data.items);
+            // Save successful results for fallback use
+            try {
+                localStorage.setItem('last_successful_recommendations', JSON.stringify({
+                    items: data.items,
+                    timestamp: Date.now(),
+                    sources: data.sources
+                }));
+            } catch (e) {
+                // Ignore localStorage errors
+            }
+            
+            renderDashboardItems(data.items, data.from_cache, data.sources);
         } else {
             if (container) {
                 container.innerHTML = `
                     <div style="text-align: center; padding: 2rem; color: #666;">
-                        <p><strong>No recommendations yet</strong></p>
-                        <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
+                        <p><strong>No recommendations found</strong></p>
+                        <p style="margin: 0.5rem 0; font-size: 0.9rem;">Try adjusting your preferences above or check back later</p>
+                        <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Try Again</button>
                     </div>
                 `;
             }
@@ -534,9 +547,43 @@ async function loadDashboardRecommendations() {
     } catch (error) {
         console.error('Error loading recommendations:', error);
         stopLoadingAnimation();
+        
+        // Try to show last successful results from localStorage as fallback
+        const lastResults = localStorage.getItem('last_successful_recommendations');
+        if (lastResults) {
+            try {
+                const data = JSON.parse(lastResults);
+                if (data.items && data.items.length > 0) {
+                    if (container) {
+                        container.innerHTML = '';
+                        // Show network error indicator with cached results
+                        const errorIndicator = document.createElement('div');
+                        errorIndicator.innerHTML = `
+                            <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #dc2626;">
+                                <span>⚠️</span>
+                                <span>Network error - showing last successful results</span>
+                                <button onclick="refreshRecommendations()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
+                            </div>
+                        `;
+                        container.appendChild(errorIndicator);
+                        
+                        // Show the cached items
+                        data.items.forEach(item => {
+                            const card = createRecommendationCard(item);
+                            container.appendChild(card);
+                        });
+                    }
+                    return;
+                }
+            } catch (e) {
+                // Failed to parse cached data, continue to error display
+            }
+        }
+        
         if (container) {
             container.innerHTML = `
                 <div style="text-align: center; padding: 2rem; color: #ef4444;">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
                     <p><strong>Error loading recommendations</strong></p>
                     <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">Make sure the backend server is running</p>
                     <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
@@ -546,11 +593,38 @@ async function loadDashboardRecommendations() {
     }
 }
 
-function renderDashboardItems(items) {
+function renderDashboardItems(items, fromCache = false, sources = []) {
     const container = document.getElementById('dashboard-digest-items');
     if (!container) return;
     
     container.innerHTML = '';
+    
+    // Add cache/source indicator if needed
+    if (fromCache || sources.includes('cache')) {
+        const cacheIndicator = document.createElement('div');
+        cacheIndicator.className = 'cache-indicator';
+        cacheIndicator.innerHTML = `
+            <div style="background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #6b7280;">
+                <span>💾</span>
+                <span>Showing cached results - refresh to get latest recommendations</span>
+                <button onclick="refreshRecommendations()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #374151; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+            </div>
+        `;
+        container.appendChild(cacheIndicator);
+    } else if (sources.includes('mock')) {
+        const mockIndicator = document.createElement('div');
+        mockIndicator.className = 'mock-indicator';
+        mockIndicator.innerHTML = `
+            <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #92400e;">
+                <span>ℹ️</span>
+                <span>Showing sample recommendations - try refreshing for live results</span>
+                <button onclick="refreshRecommendations()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #f59e0b; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+            </div>
+        `;
+        container.appendChild(mockIndicator);
+    }
+    
+    // Add recommendation cards
     items.forEach(item => {
         const card = createRecommendationCard(item);
         container.appendChild(card);
@@ -2091,38 +2165,65 @@ async function loadDigest() {
         window.currentDigest = data;
         
         if (data.items && data.items.length > 0) {
-            renderDigestItems(data.items);
+            renderDigestItems(data.items, data.from_cache, data.sources);
         } else {
             if (itemsContainer) {
-            itemsContainer.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: #666;">
-                    <p><strong>No recommendations available</strong></p>
+                itemsContainer.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: #666;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
+                        <p><strong>No recommendations available</strong></p>
+                        <p style="margin: 0.5rem 0; font-size: 0.9rem;">Try adjusting your preferences or check back later</p>
                         <button class="btn btn-primary" onclick="loadDigest()" style="width: auto; margin-top: 1rem;">Retry</button>
-                </div>
-            `;
+                    </div>
+                `;
             }
         }
     } catch (error) {
         console.error('Error loading digest:', error);
         if (itemsContainer) {
-        itemsContainer.innerHTML = `
-            <div style="text-align: center; padding: 2rem; color: #ef4444;">
-                <p><strong>Error loading recommendations</strong></p>
-                <p style="font-size: 0.85rem; margin-top: 1rem; color: #666;">Make sure the backend server is running on port 5001</p>
+            itemsContainer.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: #ef4444;">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
+                    <p><strong>Error loading recommendations</strong></p>
+                    <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">Make sure the backend server is running on port 5001</p>
                     <button class="btn btn-primary" onclick="loadDigest()" style="width: auto; margin-top: 1rem;">Retry</button>
-            </div>
-        `;
+                </div>
+            `;
         }
     } finally {
         if (loading) loading.style.display = 'none';
     }
 }
 
-function renderDigestItems(items) {
+function renderDigestItems(items, fromCache = false, sources = []) {
     const container = document.getElementById('digest-items');
     if (!container) return;
     
     container.innerHTML = '';
+    
+    // Add cache/source indicator if needed
+    if (fromCache || sources.includes('cache')) {
+        const cacheIndicator = document.createElement('div');
+        cacheIndicator.innerHTML = `
+            <div style="background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #6b7280;">
+                <span>💾</span>
+                <span>Showing cached results - refresh to get latest recommendations</span>
+                <button onclick="loadDigest()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #374151; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+            </div>
+        `;
+        container.appendChild(cacheIndicator);
+    } else if (sources.includes('mock')) {
+        const mockIndicator = document.createElement('div');
+        mockIndicator.innerHTML = `
+            <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #92400e;">
+                <span>ℹ️</span>
+                <span>Showing sample recommendations - try refreshing for live results</span>
+                <button onclick="loadDigest()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #f59e0b; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh</button>
+            </div>
+        `;
+        container.appendChild(mockIndicator);
+    }
+    
     items.forEach(item => {
         const card = createRecommendationCard(item);
         container.appendChild(card);
