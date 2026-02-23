@@ -1008,7 +1008,7 @@ def enrich_items_with_images(items, max_time_seconds=4):
             print(f"[IMAGE_ENRICH] Error enriching '{item.get('title', 'item')}': {e}")
             return item
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         # Submit all image search tasks
         future_to_item = {executor.submit(fetch_image_for_item, item): item for item in items}
         
@@ -1279,7 +1279,10 @@ def get_google_places_recommendations(prefs, user_id, user_lat, user_lng):
     for category in categories[:3]:  # Limit to 3 categories to avoid rate limits
         places = search_google_places(location, category, radius_meters)
         if places:
-            for i, place in enumerate(places[:3]):  # Top 3 per category
+            cat_count = 0
+            for i, place in enumerate(places[:8]):  # Check top 8, take up to 3
+                if _is_excluded_place(place):
+                    continue
                 item = convert_google_place_to_item(place, location, len(items))
                 
                 # Apply kid_friendly filter if needed
@@ -1292,6 +1295,9 @@ def get_google_places_recommendations(prefs, user_id, user_lat, user_lng):
                     continue
                 
                 items.append(item)
+                cat_count += 1
+                if cat_count >= 3:
+                    break
     
     return items
 
@@ -1784,6 +1790,23 @@ def estimate_travel_time_minutes(distance_miles, avg_mph=25):
     return max(5, int(round((distance_miles / avg_mph) * 60)))
 
 
+_EXCLUDED_PLACE_TYPES = {
+    'lodging', 'hotel', 'motel', 'inn', 'resort_hotel',
+    'real_estate_agency', 'insurance_agency', 'lawyer', 'dentist',
+    'doctor', 'hospital', 'pharmacy', 'bank', 'atm',
+    'car_dealer', 'car_rental', 'car_repair', 'car_wash',
+    'gas_station', 'parking', 'storage', 'moving_company',
+    'laundry', 'locksmith', 'plumber', 'electrician',
+    'funeral_home', 'cemetery',
+}
+
+
+def _is_excluded_place(place):
+    """Return True if this place type isn't suitable for family weekend trips."""
+    types = set(place.get('types', []))
+    return bool(types & _EXCLUDED_PLACE_TYPES)
+
+
 def convert_google_place_to_item(place, user_location, index):
     """Convert Google Places API result to our recommendation format"""
     
@@ -1873,9 +1896,13 @@ def search_places():
     for category in categories:
         places = search_google_places(location, category, radius)
         if places:
-            for i, place in enumerate(places[:5]):  # Limit to 5 per category
+            for i, place in enumerate(places[:8]):  # Limit to 5 per category after filtering
+                if _is_excluded_place(place):
+                    continue
                 item = convert_google_place_to_item(place, location, len(all_places))
                 all_places.append(item)
+                if sum(1 for p in all_places if p.get('category') == item.get('category')) >= 5:
+                    break
     
     # Sort by rating
     all_places.sort(key=lambda x: (x.get('rating', 0), -x.get('distance_miles', 100)), reverse=True)
@@ -3500,4 +3527,4 @@ if __name__ == '__main__':
     print("API endpoints available at http://localhost:5001/v1")
     print("Health check: http://localhost:5001/health")
     print("=" * 50)
-    app.run(debug=True, port=5001, host='0.0.0.0')
+    app.run(debug=False, port=5001, host='0.0.0.0')
