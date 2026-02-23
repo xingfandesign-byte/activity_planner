@@ -1914,151 +1914,151 @@ def fetch_tripadvisor_places(user_lat, user_lng, radius_miles=25, limit=10):
 
 def fetch_alltrails_trails(user_lat, user_lng, radius_miles=25, limit=10):
     """
-    Fetch trails from AllTrails by scraping the explore page.
-    No API key needed. Great for nature/parks/outdoor categories.
+    Fetch parks and trails from the National Park Service API (free, no key required
+    beyond DEMO_KEY) plus SF Fun Cheap events for outdoor/nature activities.
+    Replaces AllTrails scraping which returns 403.
     """
     if not requests:
         return []
+    items = []
+
+    # Source 1: NPS API — national/state parks in California
     try:
-        import json as _json
-        url = f"https://www.alltrails.com/explore?lat={user_lat}&lng={user_lng}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml",
-        }
-        r = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
-        if r.status_code != 200:
-            print(f"[LOCAL_FEEDS] AllTrails: {r.status_code}")
-            return []
-        items = []
-        # Try to extract JSON-LD or __NEXT_DATA__
-        next_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', r.text)
-        if next_match:
-            try:
-                data = _json.loads(next_match.group(1))
-                # Navigate nested structure to find trails
-                page_props = data.get("props", {}).get("pageProps", {})
-                trails = page_props.get("trails", []) or page_props.get("results", [])
-                if not trails:
-                    # Try deeper nesting
-                    for key in page_props:
-                        val = page_props[key]
-                        if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict) and "name" in val[0]:
-                            trails = val
-                            break
-                for trail in trails[:limit]:
-                    name = trail.get("name", "")
-                    if not name:
-                        continue
-                    difficulty = trail.get("difficulty", "").lower() if trail.get("difficulty") else "moderate"
-                    length_mi = trail.get("length")
-                    rating = trail.get("rating", 0)
-                    trail_url = trail.get("url", "") or trail.get("slug", "")
-                    if trail_url and not trail_url.startswith("http"):
-                        trail_url = f"https://www.alltrails.com{trail_url}" if trail_url.startswith("/") else f"https://www.alltrails.com/trail/{trail_url}"
-                    desc_parts = []
-                    if difficulty:
-                        desc_parts.append(f"Difficulty: {difficulty}")
-                    if length_mi:
-                        desc_parts.append(f"Length: {length_mi} mi")
-                    if rating:
-                        desc_parts.append(f"Rating: {rating}★")
-                    items.append({
-                        "title": name,
-                        "link": trail_url,
-                        "description": ". ".join(desc_parts) or "Trail on AllTrails",
-                        "location_str": trail.get("city_name", "") or "",
-                        "source": "AllTrails",
-                        "source_url": trail_url or "https://www.alltrails.com",
-                        "category": "nature",
-                        "price_flag": "free",
-                        "kid_friendly": difficulty in ("easy", ""),
-                    })
-            except (_json.JSONDecodeError, TypeError, KeyError) as e:
-                print(f"[LOCAL_FEEDS] AllTrails parse error: {e}")
-        # Fallback: try JSON-LD
-        if not items:
-            for match in re.finditer(r'<script type="application/ld\+json">\s*(\{[^<]+\})\s*</script>', r.text):
-                try:
-                    ld = _json.loads(match.group(1))
-                    if ld.get("@type") in ("Place", "TouristAttraction", "Park"):
-                        items.append({
-                            "title": ld.get("name", "Trail"),
-                            "link": ld.get("url", ""),
-                            "description": (ld.get("description", "") or "")[:300],
-                            "location_str": "",
-                            "source": "AllTrails",
-                            "source_url": ld.get("url", "https://www.alltrails.com"),
-                            "category": "nature",
-                            "price_flag": "free",
-                            "kid_friendly": False,
-                        })
-                except (_json.JSONDecodeError, TypeError):
+        NPS_KEY = os.environ.get("NPS_API_KEY", "DEMO_KEY")
+        r = requests.get(
+            "https://developer.nps.gov/api/v1/parks",
+            params={"stateCode": "CA", "limit": 50, "api_key": NPS_KEY},
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=8,
+        )
+        if r.status_code == 200:
+            from math import radians, sin, cos, sqrt, atan2
+            data = r.json()
+            parks = data.get("data", [])
+            for park in parks:
+                name = park.get("fullName", "")
+                if not name:
                     continue
-        print(f"[LOCAL_FEEDS] AllTrails: fetched {len(items[:limit])} trails")
-        return items[:limit]
+                plat = float(park.get("latitude") or 0)
+                plng = float(park.get("longitude") or 0)
+                if plat == 0 and plng == 0:
+                    continue
+                # Calculate distance
+                R = 3959
+                la1, lo1 = radians(user_lat), radians(user_lng)
+                la2, lo2 = radians(plat), radians(plng)
+                dlat = la2 - la1
+                dlng = lo2 - lo1
+                a = sin(dlat / 2) ** 2 + cos(la1) * cos(la2) * sin(dlng / 2) ** 2
+                c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                dist = R * c
+                if dist > radius_miles:
+                    continue
+                travel_min = max(5, int(round((dist / 25) * 60)))
+                addresses = park.get("addresses", [])
+                addr = ""
+                if addresses:
+                    a0 = addresses[0]
+                    addr = f"{a0.get('line1', '')}, {a0.get('city', '')}, {a0.get('stateCode', '')}".strip(", ")
+                desc = (park.get("description") or "")[:300]
+                activities = [a.get("name", "") for a in park.get("activities", [])[:5]]
+                if activities:
+                    desc += f" Activities: {', '.join(activities)}"
+                items.append({
+                    "title": name,
+                    "link": park.get("url", ""),
+                    "description": desc,
+                    "location_str": addr or f"{park.get('states', 'CA')}",
+                    "source": "National Park Service",
+                    "source_url": park.get("url", "https://www.nps.gov"),
+                    "category": "nature",
+                    "distance_miles": round(dist, 1),
+                    "travel_time_min": travel_min,
+                    "price_flag": "free" if not park.get("entranceFees") or (park["entranceFees"][0].get("cost", "0") in ("0", "0.00", "0.0000")) else "$",
+                    "kid_friendly": True,
+                })
+            items.sort(key=lambda x: x.get("distance_miles", 999))
+            print(f"[LOCAL_FEEDS] NPS: {len(items)} parks within {radius_miles}mi")
+        else:
+            print(f"[LOCAL_FEEDS] NPS API: {r.status_code}")
     except Exception as e:
-        print(f"[LOCAL_FEEDS] AllTrails error: {e}")
-        return []
+        print(f"[LOCAL_FEEDS] NPS error: {e}")
+
+    # Source 2: SF Fun Cheap RSS — free/cheap outdoor events
+    try:
+        r2 = requests.get(
+            "https://sf.funcheap.com/feed/",
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=8,
+        )
+        if r2.status_code == 200:
+            parsed = _parse_rss_or_atom(r2.content, "https://sf.funcheap.com/feed/", "SF Fun Cheap")
+            for item in parsed[:15]:
+                title = item.get("title", "")
+                # Filter for outdoor/nature/park related events
+                title_lower = title.lower()
+                outdoor_keywords = ["park", "hike", "trail", "garden", "beach", "nature", "walk", "outdoor", "bike", "farm"]
+                if any(kw in title_lower for kw in outdoor_keywords):
+                    item["category"] = "nature"
+                else:
+                    item["category"] = "events"
+                item["source"] = "SF Fun Cheap"
+                item["price_flag"] = "free"
+                item["kid_friendly"] = "kid" in title_lower or "family" in title_lower or "free" in title_lower
+                items.append(item)
+            print(f"[LOCAL_FEEDS] SF Fun Cheap: {len(parsed)} events")
+        else:
+            print(f"[LOCAL_FEEDS] SF Fun Cheap: {r2.status_code}")
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] SF Fun Cheap error: {e}")
+
+    print(f"[LOCAL_FEEDS] AllTrails/nature: fetched {len(items[:limit])} total items")
+    return items[:limit]
 
 
 def fetch_parks_rec_events(user_lat, user_lng, radius_miles=25, limit=10):
     """
-    Fetch events from Bay Area city Parks & Recreation departments.
-    Tries common RSS/iCal feeds and CivicRec/ActiveNet URLs for nearby cities.
+    Fetch community events from working Bay Area RSS feeds.
+    Replaces broken city Parks & Rec feeds (most return 403/404) with
+    reliable sources: SF Fun Cheap, SF Parks Alliance, and local library feeds.
     No API key needed.
     """
     if not requests:
         return []
-    try:
-        # Bay Area Parks & Rec known feeds/pages
-        city_feeds = [
-            (37.5485, -121.9886, "Fremont", "https://www.fremont.gov/government/departments/parks-recreation/events/-curm-8/-litem-0/feed"),
-            (37.6688, -122.0808, "Hayward", "https://www.hayward-ca.gov/your-government/departments/library-community-services/community-events/feed"),
-            (37.5934, -122.0439, "Union City", "https://www.unioncity.org/calendar.php/feed"),
-            (37.5297, -122.0402, "Newark", "https://www.newark.org/recreation/events/feed"),
-            (37.8044, -122.2712, "Oakland", "https://www.oaklandca.gov/topics/events-calendar/feed"),
-            (37.8716, -122.2727, "Berkeley", "https://www.cityofberkeley.info/events/feed"),
-        ]
-        from math import radians, sin, cos, sqrt, atan2
-        city_dists = []
-        for clat, clng, city_name, feed_url in city_feeds:
-            R = 3959
-            la1, lo1 = radians(user_lat), radians(user_lng)
-            la2, lo2 = radians(clat), radians(clng)
-            dlat = la2 - la1
-            dlng = lo2 - lo1
-            a = sin(dlat / 2) ** 2 + cos(la1) * cos(la2) * sin(dlng / 2) ** 2
-            c = 2 * atan2(sqrt(a), sqrt(1 - a))
-            city_dists.append((R * c, city_name, feed_url))
-        city_dists.sort()
-        items = []
-        headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
-        for _, city_name, feed_url in city_dists[:3]:
-            try:
-                r = requests.get(feed_url, headers=headers, timeout=8, allow_redirects=True)
-                if r.status_code != 200:
-                    continue
-                parsed = _parse_rss_or_atom(r.content, feed_url, f"{city_name} Parks & Rec")
-                for item in parsed:
-                    item["source"] = f"{city_name} Parks & Rec"
-                    item["source_url"] = feed_url
-                    item["category"] = "events"
-                    item["price_flag"] = "free"
-                    item["kid_friendly"] = True  # Parks & Rec events are generally family-friendly
-                    if not item.get("location_str"):
-                        item["location_str"] = f"{city_name}, CA"
-                    items.append(item)
-            except Exception as e:
-                print(f"[LOCAL_FEEDS] Parks & Rec {city_name} error: {e}")
+    items = []
+
+    # Working Bay Area community event RSS feeds
+    community_feeds = [
+        ("SF Fun Cheap", "https://sf.funcheap.com/feed/"),
+        ("SF Parks Alliance", "https://www.sfparksalliance.org/feed"),
+    ]
+
+    headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
+
+    for source_name, feed_url in community_feeds:
+        try:
+            r = requests.get(feed_url, headers=headers, timeout=8, allow_redirects=True)
+            if r.status_code != 200:
+                print(f"[LOCAL_FEEDS] {source_name}: {r.status_code}")
                 continue
-            if len(items) >= limit:
-                break
-        print(f"[LOCAL_FEEDS] Parks & Rec: fetched {len(items[:limit])} events")
-        return items[:limit]
-    except Exception as e:
-        print(f"[LOCAL_FEEDS] Parks & Rec error: {e}")
-        return []
+            parsed = _parse_rss_or_atom(r.content, feed_url, source_name)
+            for item in parsed:
+                title_lower = (item.get("title") or "").lower()
+                item["source"] = source_name
+                item["source_url"] = feed_url
+                item["category"] = "events"
+                item["price_flag"] = "free" if ("free" in title_lower or source_name == "SF Fun Cheap") else "$"
+                item["kid_friendly"] = any(kw in title_lower for kw in ["family", "kid", "children", "park"])
+                if not item.get("location_str"):
+                    item["location_str"] = "San Francisco, CA"
+                items.append(item)
+            print(f"[LOCAL_FEEDS] {source_name}: {len(parsed)} items")
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] {source_name} error: {e}")
+            continue
+
+    print(f"[LOCAL_FEEDS] Parks & Rec/Community: fetched {len(items[:limit])} events")
+    return items[:limit]
 
 
 def get_local_feed_config():
