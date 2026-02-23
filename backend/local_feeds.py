@@ -1912,7 +1912,7 @@ def fetch_tripadvisor_places(user_lat, user_lng, radius_miles=25, limit=10):
         return []
 
 
-def fetch_alltrails_trails(user_lat, user_lng, limit=10):
+def fetch_alltrails_trails(user_lat, user_lng, radius_miles=25, limit=10):
     """
     Fetch trails from AllTrails by scraping the explore page.
     No API key needed. Great for nature/parks/outdoor categories.
@@ -2002,7 +2002,7 @@ def fetch_alltrails_trails(user_lat, user_lng, limit=10):
         return []
 
 
-def fetch_parks_rec_events(user_lat, user_lng, limit=10):
+def fetch_parks_rec_events(user_lat, user_lng, radius_miles=25, limit=10):
     """
     Fetch events from Bay Area city Parks & Recreation departments.
     Tries common RSS/iCal feeds and CivicRec/ActiveNet URLs for nearby cities.
