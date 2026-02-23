@@ -647,6 +647,7 @@ async function loadDashboardRecommendations() {
                         container.innerHTML = '';
                         // Show network error indicator with cached results
                         const errorIndicator = document.createElement('div');
+                        errorIndicator.style.gridColumn = '1 / -1';
                         errorIndicator.innerHTML = `
                             <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #dc2626;">
                                 <span>⚠️</span>
@@ -719,11 +720,12 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     
     container.innerHTML = '';
     
-    // Show response time if available
+    // Show response time if available (outside grid flow)
     const responseTime = window.currentDigest?.response_time_ms;
     if (responseTime !== undefined) {
         const timeIndicator = document.createElement('div');
         timeIndicator.className = 'response-time-indicator';
+        timeIndicator.style.gridColumn = '1 / -1';
         timeIndicator.textContent = `Loaded in ${responseTime < 1000 ? responseTime + 'ms' : (responseTime / 1000).toFixed(1) + 's'}`;
         container.appendChild(timeIndicator);
     }
@@ -732,6 +734,7 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     if (fromCache || sources.includes('cache')) {
         const cacheIndicator = document.createElement('div');
         cacheIndicator.className = 'cache-indicator';
+        cacheIndicator.style.gridColumn = '1 / -1';
         cacheIndicator.innerHTML = `
             <div style="background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #6b7280;">
                 <span>💾</span>
@@ -743,6 +746,7 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     } else if (sources.includes('mock')) {
         const mockIndicator = document.createElement('div');
         mockIndicator.className = 'mock-indicator';
+        mockIndicator.style.gridColumn = '1 / -1';
         mockIndicator.innerHTML = `
             <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #92400e;">
                 <span>ℹ️</span>

@@ -1445,6 +1445,11 @@ header {
     margin-top: 2rem;
 }
 
+/* Make non-card children (indicators, banners) span full width */
+.digest-grid > :not(.recommendation-card) {
+    grid-column: 1 / -1;
+}
+
 .recommendation-card {
     background: #f9fafb;
     border: 2px solid #e5e7eb;
