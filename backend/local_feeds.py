@@ -925,6 +925,14 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
     for interest in user_interests:
         relevant_keywords.update(interest_categories.get(interest, [interest]))
     
+    # Time-aware scoring: boost items based on current time of day and day of week
+    now = datetime.now()
+    current_hour = now.hour
+    is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
+    is_morning = 6 <= current_hour < 12
+    is_afternoon = 12 <= current_hour < 17
+    is_evening = 17 <= current_hour < 22
+    
     # Score each item
     scored_items = []
     seen_fuzzy_titles = set()
@@ -994,6 +1002,24 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
         # Bonus for items with event dates (timely content is more actionable)
         if item.get("event_date"):
             score += 5
+        
+        # Time-aware scoring
+        indoor_outdoor = (item.get("indoor_outdoor", "") or "").lower()
+        if is_morning and indoor_outdoor == "outdoor":
+            score += 5  # Outdoor activities are great in the morning
+        elif is_evening and indoor_outdoor == "indoor":
+            score += 5  # Indoor activities for evenings
+        elif is_evening:
+            # Boost entertainment/food for evening
+            if category in ("entertainment", "food_drink", "food_drinks", "food", "nightlife"):
+                score += 8
+        
+        # Weekend bonus for day-trip worthy activities
+        if is_weekend:
+            if has_distance and item.get("distance_miles", 0) > 15:
+                score += 5  # Farther activities are more viable on weekends
+            if category in ("nature", "adventure", "parks"):
+                score += 3  # Outdoor/nature activities are great for weekends
         
         scored_items.append((score, item))
     
