@@ -2255,7 +2255,7 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     ]
     # Early return: stop waiting after 5s so we return fast with available results.
     FETCH_TIMEOUT = 5
-    with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
+    with ThreadPoolExecutor(max_workers=min(4, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
         try:
             for future in as_completed(futures, timeout=FETCH_TIMEOUT):
