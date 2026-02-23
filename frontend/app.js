@@ -402,6 +402,29 @@ function setupEventListeners() {
         });
     });
     
+    // Enter key support for forms
+    document.getElementById('login-password')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleLogin();
+    });
+    document.getElementById('login-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('login-password')?.focus();
+    });
+    document.getElementById('signup-password')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleSignup();
+    });
+    document.getElementById('signup-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('signup-password')?.focus();
+    });
+    document.getElementById('zip-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitLocation('zip');
+    });
+    document.getElementById('address-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitLocation('address');
+    });
+    document.getElementById('forgot-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleForgotPassword();
+    });
+    
     // Modal close buttons
     document.querySelectorAll('.modal .close').forEach(btn => {
         btn.addEventListener('click', () => {
