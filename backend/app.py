@@ -414,13 +414,63 @@ def reverse_geocode():
         return jsonify({"error": "Reverse geocoding failed"}), 500
 
 
-def search_free_image(query, timeout=3):
+def scrape_og_image(url, timeout=3):
+    """Fetch a page and extract og:image or first large image. Fast and reliable for event pages."""
+    if not url or not url.startswith('http'):
+        return None
+    cache_key = f"og_img:{url[:200]}"
+    if cache_key in image_search_cache:
+        return image_search_cache[cache_key].get("url")
+    try:
+        import re as _re
+        r = requests.get(url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html"
+        }, allow_redirects=True)
+        if r.status_code != 200:
+            image_search_cache[cache_key] = {"url": None}
+            return None
+        # Only check first 50KB to stay fast
+        html = r.text[:50000]
+        # 1. og:image
+        m = _re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\'](https?://[^"\']+)["\']', html, _re.I)
+        if not m:
+            m = _re.search(r'<meta[^>]*content=["\'](https?://[^"\']+)["\'][^>]*property=["\']og:image["\']', html, _re.I)
+        if m:
+            img_url = m.group(1)
+            # Skip tiny/pixel images
+            if 'pixel' not in img_url and '1x1' not in img_url and 'spacer' not in img_url:
+                image_search_cache[cache_key] = {"url": img_url, "source": "og:image"}
+                print(f"[OG_IMAGE] Found og:image for {url[:60]}: {img_url[:80]}")
+                return img_url
+        # 2. twitter:image
+        m = _re.search(r'<meta[^>]*(?:name|property)=["\']twitter:image["\'][^>]*content=["\'](https?://[^"\']+)["\']', html, _re.I)
+        if m:
+            img_url = m.group(1)
+            image_search_cache[cache_key] = {"url": img_url, "source": "twitter:image"}
+            print(f"[OG_IMAGE] Found twitter:image for {url[:60]}: {img_url[:80]}")
+            return img_url
+        image_search_cache[cache_key] = {"url": None}
+    except Exception as e:
+        print(f"[OG_IMAGE] Error fetching {url[:60]}: {e}")
+        image_search_cache[cache_key] = {"url": None}
+    return None
+
+
+def search_free_image(query, event_url=None, timeout=3):
     """
     Search for an image using free sources (no API key needed):
+    0. Scrape og:image from event URL (most reliable for events)
     1. Wikipedia/Wikimedia Commons REST API
     2. DuckDuckGo Instant Answer API
     Returns image URL or None if not found.
     """
+    # Try og:image first (fastest, most reliable for events)
+    if event_url:
+        og_url = scrape_og_image(event_url, timeout=min(timeout, 2))
+        if og_url:
+            return og_url, "og:image"
+
     if not query or len(query) < 2:
         return None, None
     
@@ -801,6 +851,9 @@ def enrich_items_with_images(items, max_time_seconds=2):
             title = item.get('title', '')
             location = item.get('address', '') or item.get('location_str', '')
             
+            # Get event URL for og:image scraping
+            event_url = item.get('event_link') or item.get('source_url') or item.get('link') or ''
+            
             # Build search query: title + location for better results
             query_parts = [title]
             if location and location.lower() not in title.lower():
@@ -811,8 +864,8 @@ def enrich_items_with_images(items, max_time_seconds=2):
             
             query = " ".join(query_parts).strip()
             
-            # Search for image
-            image_url, source = search_free_image(query)
+            # Search for image (tries og:image first, then Wikipedia, then DDG)
+            image_url, source = search_free_image(query, event_url=event_url)
             
             # Update item with image if found
             item_copy = item.copy()
@@ -832,23 +885,21 @@ def enrich_items_with_images(items, max_time_seconds=2):
         future_to_item = {executor.submit(fetch_image_for_item, item): item for item in items}
         
         # Collect results with timeout
-        for future in concurrent.futures.as_completed(future_to_item, timeout=max_time_seconds):
-            try:
-                enriched_item = future.result()
-                enriched_items.append(enriched_item)
-            except concurrent.futures.TimeoutError:
-                # Add original item if timeout
-                original_item = future_to_item[future]
-                enriched_items.append(original_item)
-            except Exception as e:
-                # Add original item if error
-                original_item = future_to_item[future]
-                enriched_items.append(original_item)
-                print(f"[IMAGE_ENRICH] Error processing item: {e}")
-            
-            # Check overall time limit
-            if time.time() - start_time > max_time_seconds:
-                break
+        try:
+            for future in concurrent.futures.as_completed(future_to_item, timeout=max_time_seconds):
+                try:
+                    enriched_item = future.result(timeout=0.5)
+                    enriched_items.append(enriched_item)
+                except Exception as e:
+                    original_item = future_to_item[future]
+                    enriched_items.append(original_item)
+                    print(f"[IMAGE_ENRICH] Error processing item: {e}")
+                
+                # Check overall time limit
+                if time.time() - start_time > max_time_seconds:
+                    break
+        except (TimeoutError, concurrent.futures.TimeoutError):
+            print(f"[IMAGE_ENRICH] Global timeout after {time.time() - start_time:.1f}s")
     
     # Add any remaining items that didn't complete
     completed_items = len(enriched_items)
@@ -1061,7 +1112,7 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         
         # Step 5: Enrich items with real images (parallel, max 2s)
         print(f"[RECOMMENDATIONS] Enriching {len(final_items)} items with images...")
-        final_items = enrich_items_with_images(final_items, max_time_seconds=2)
+        final_items = enrich_items_with_images(final_items, max_time_seconds=3)
         
         # Cache successful results
         if final_items:
