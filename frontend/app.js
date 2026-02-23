@@ -2665,8 +2665,9 @@ async function showDetail(recId) {
                 <button class="slot-btn" onclick="selectSlot('SUN_PM')">Sunday Afternoon</button>
             </div>
         </div>
-        <div style="margin-top: 1rem; padding-top: 1rem;">
-            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')">Add to Calendar</button>
+        <div style="margin-top: 1rem; padding-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')" style="flex: 1;">Add to Calendar</button>
+            <button class="btn btn-secondary" onclick="shareRecommendation('${recId}')" style="flex: 0 0 auto;">📤 Share</button>
         </div>
     `;
     
