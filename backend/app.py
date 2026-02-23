@@ -64,6 +64,10 @@ places_cache = {}
 geocode_cache = {}
 # Cache for image search (query -> url) to avoid hitting API limits
 image_search_cache = {}
+# In-memory warm cache for recommendations (key -> {items, sources, timestamp})
+_warm_cache = {}
+_warm_cache_lock = None  # Lazy-initialized threading lock
+_background_refresh_in_progress = set()  # Track in-flight background refreshes
 
 # Circuit breaker pattern for external APIs
 _circuit_breakers = {}  # {source: {failures: int, last_failure: datetime, total_calls: int}}
@@ -547,31 +551,108 @@ def record_failure(source):
 
 # ========== RECOMMENDATION ENGINE ==========
 
+def _get_warm_cache_key(user_id, prefs):
+    """Generate a stable cache key for warm cache lookups."""
+    import hashlib
+    home_location = prefs.get('home_location', {})
+    categories = prefs.get('categories', [])
+    location_str = home_location.get('formatted_address') or home_location.get('input') or ''
+    kid_friendly = prefs.get('kid_friendly', False)
+    travel_time_ranges = prefs.get('travel_time_ranges', [])
+    cache_key_data = f"{user_id}|{location_str}|{','.join(sorted(categories))}|{kid_friendly}|{','.join(sorted(travel_time_ranges))}"
+    return hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
+
+
+def _refresh_recommendations_background(user_id, prefs, cache_key):
+    """Background thread to refresh recommendations and update warm cache."""
+    global _warm_cache, _background_refresh_in_progress
+    try:
+        items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+        if items:
+            _warm_cache[cache_key] = {
+                'items': items,
+                'sources': sources,
+                'timestamp': datetime.now()
+            }
+            print(f"[WARM_CACHE] Background refresh done: {len(items)} items for key {cache_key}")
+    except Exception as e:
+        print(f"[WARM_CACHE] Background refresh error: {e}")
+    finally:
+        _background_refresh_in_progress.discard(cache_key)
+
+
+# Warm cache TTL: serve from cache if < 15 min old, trigger background refresh if > 5 min old
+WARM_CACHE_FRESH_SECONDS = 300   # 5 min: fully fresh, no refresh needed
+WARM_CACHE_STALE_SECONDS = 900   # 15 min: stale but serveable, trigger background refresh
+
+
 def get_recommendations(user_id, prefs):
     """
-    Main recommendation engine with fallback chain:
+    Main recommendation engine with stale-while-revalidate pattern:
+    1. Check in-memory warm cache — serve immediately if available
+    2. If cache is stale (>5min), trigger background refresh
+    3. If no cache, fetch live (blocking)
+    4. Fallback chain: Google Places -> Local feeds -> DB cache -> Mock data
+    """
+    import hashlib
+    import threading
+    global _warm_cache_lock
+    if _warm_cache_lock is None:
+        _warm_cache_lock = threading.Lock()
+    
+    cache_key = _get_warm_cache_key(user_id, prefs)
+    print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
+    
+    # Step 0: Check warm cache (stale-while-revalidate)
+    cached = _warm_cache.get(cache_key)
+    if cached:
+        age_seconds = (datetime.now() - cached['timestamp']).total_seconds()
+        if age_seconds < WARM_CACHE_STALE_SECONDS:
+            print(f"[WARM_CACHE] Hit! age={age_seconds:.0f}s, items={len(cached['items'])}")
+            # If stale (>5min), trigger background refresh
+            if age_seconds > WARM_CACHE_FRESH_SECONDS and cache_key not in _background_refresh_in_progress:
+                _background_refresh_in_progress.add(cache_key)
+                t = threading.Thread(
+                    target=_refresh_recommendations_background,
+                    args=(user_id, prefs, cache_key),
+                    daemon=True
+                )
+                t.start()
+                print(f"[WARM_CACHE] Triggered background refresh (stale)")
+            return cached['items'], cached['sources']
+    
+    # No warm cache — fetch live (blocking)
+    items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+    
+    # Store in warm cache
+    if items:
+        _warm_cache[cache_key] = {
+            'items': items,
+            'sources': sources,
+            'timestamp': datetime.now()
+        }
+    
+    return items, sources
+
+
+def _fetch_recommendations_live(user_id, prefs, cache_key):
+    """
+    Live fetch from all sources with fallback chain:
     1. Try Google Places API (if key configured)
-    2. Try local feeds (parallel fetch, 15s timeout)  
+    2. Try local feeds (parallel fetch, 5s timeout)
     3. Merge and rank results
     4. Cache successful results
     5. If all live sources fail, return cached results
-    6. If no cache, return enriched mock data (compute distances from user location)
+    6. If no cache, return enriched mock data
     """
     from datetime import datetime, timedelta
-    import hashlib
     
-    # Generate cache key from user preferences
+    # Resolve user location
     home_location = prefs.get('home_location', {})
     user_lat, user_lng = resolve_user_location(home_location)
     categories = prefs.get('categories', [])
-    location_str = home_location.get('formatted_address') or home_location.get('input') or f"{user_lat},{user_lng}"
     kid_friendly = prefs.get('kid_friendly', False)
     travel_time_ranges = prefs.get('travel_time_ranges', [])
-    
-    cache_key_data = f"{user_id}|{location_str}|{','.join(sorted(categories))}|{kid_friendly}|{','.join(sorted(travel_time_ranges))}"
-    cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
-    
-    print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
     
     # Step 1: Try to get from cache first
     cached = db.get_cached_recommendations(user_id, cache_key)
@@ -3151,6 +3232,56 @@ def api_status():
 def health_check():
     """Health check endpoint"""
     return jsonify({"status": "ok", "service": "activity-planner-api"})
+
+def _warm_cache_on_startup():
+    """Pre-fetch recommendations for known users on startup (background thread)."""
+    import threading
+    import time
+    
+    def _do_warm():
+        time.sleep(2)  # Let the server start first
+        try:
+            users_with_prefs = db.get_all_users_with_preferences()
+            if not users_with_prefs:
+                # Warm cache for demo user with default prefs
+                users_with_prefs = [{'id': 'demo_user', 'preferences': {
+                    'home_location': {'value': 'San Francisco, CA'},
+                    'categories': ['parks', 'museums', 'attractions'],
+                    'kid_friendly': True,
+                    'travel_time_ranges': ['15-30'],
+                }}]
+            
+            for user in users_with_prefs[:3]:  # Warm top 3 users max
+                user_id = user.get('id', 'demo_user')
+                prefs = user.get('preferences', {})
+                if not prefs:
+                    continue
+                cache_key = _get_warm_cache_key(user_id, prefs)
+                if cache_key in _warm_cache:
+                    continue
+                print(f"[WARM_CACHE] Pre-warming for user {user_id}...")
+                try:
+                    items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+                    if items:
+                        _warm_cache[cache_key] = {
+                            'items': items,
+                            'sources': sources,
+                            'timestamp': datetime.now()
+                        }
+                        print(f"[WARM_CACHE] Warmed {len(items)} items for {user_id}")
+                except Exception as e:
+                    print(f"[WARM_CACHE] Error warming for {user_id}: {e}")
+        except Exception as e:
+            print(f"[WARM_CACHE] Startup warming error: {e}")
+    
+    t = threading.Thread(target=_do_warm, daemon=True)
+    t.start()
+    print("[WARM_CACHE] Background cache warming started")
+
+
+# Warm cache on startup (non-blocking)
+_warm_cache_on_startup()
+
 
 if __name__ == '__main__':
     print("=" * 50)
