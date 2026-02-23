@@ -687,6 +687,32 @@ async function loadDashboardRecommendations() {
     }
 }
 
+// Lazy load images using IntersectionObserver
+const _imgObserver = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const img = entry.target;
+            if (img.dataset.src) {
+                img.src = img.dataset.src;
+                delete img.dataset.src;
+            }
+            _imgObserver.unobserve(img);
+        }
+    });
+}, { rootMargin: '200px' }) : null;
+
+function observeLazyImages(container) {
+    if (!container) return;
+    container.querySelectorAll('img[data-src]').forEach(img => {
+        if (_imgObserver) {
+            _imgObserver.observe(img);
+        } else {
+            img.src = img.dataset.src;
+            delete img.dataset.src;
+        }
+    });
+}
+
 function renderDashboardItems(items, fromCache = false, sources = []) {
     const container = document.getElementById('dashboard-digest-items');
     if (!container) return;
@@ -732,6 +758,9 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
         const card = createRecommendationCard(item);
         container.appendChild(card);
     });
+    
+    // Start lazy loading images
+    observeLazyImages(container);
 }
 
 // ==================== AUTH FORMS ====================
@@ -2331,6 +2360,8 @@ function renderDigestItems(items, fromCache = false, sources = []) {
         const card = createRecommendationCard(item);
         container.appendChild(card);
     });
+    
+    observeLazyImages(container);
 }
 
 function createRecommendationCard(item) {
@@ -2412,7 +2443,22 @@ function createRecommendationCard(item) {
         ? '<span class="info-badge" style="color:#059669;font-weight:600;">Free</span>' 
         : (item.price_flag && item.price_flag !== '$' ? `<span class="info-badge">${item.price_flag}</span>` : '');
     
+    // Card image
+    const cardImageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title);
+    const categoryEmojis = {
+        'parks': '🌲', 'museums': '🏛️', 'food': '🍽️', 'attractions': '🎢',
+        'entertainment': '🎭', 'shopping': '🛍️', 'events': '🎪', 'nature': '🌿',
+        'family': '👨‍👩‍👧‍👦', 'community': '🏘️'
+    };
+    const placeholderEmoji = categoryEmojis[item.category] || '📍';
+
     card.innerHTML = `
+        <div class="card-image-container">
+            <div class="card-image-placeholder">${placeholderEmoji}</div>
+            <img class="card-image" data-src="${cardImageUrl}" alt="" loading="lazy"
+                 onload="this.classList.add('loaded')"
+                 onerror="this.remove()">
+        </div>
         <div class="card-header">
             <div>
                 <div class="card-title">${item.title}</div>
