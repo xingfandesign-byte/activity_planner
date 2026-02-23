@@ -219,7 +219,7 @@ def _fetch_url(url, timeout=4, headers=None):
 def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
     """
     Parse RSS 2.0 or Atom 1.0 and return list of dicts:
-    { title, link, description, pub_date, location_str, source, source_url }
+    { title, link, description, pub_date, location_str, source, source_url, image_url }
     """
     if not raw_bytes:
         return []
@@ -251,12 +251,43 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
             link = (link_el.text or "").strip() if link_el is not None else ""
             if not title and not link:
                 continue
+                
             desc = ""
             if desc_el is not None and desc_el.text:
                 desc = desc_el.text.strip()
             elif desc_el is not None and len(desc_el):
                 desc = ET.tostring(desc_el, encoding="unicode", method="text")[:500]
             pub_date = (pub_el.text or "").strip() if pub_el is not None else ""
+            
+            # Extract image from various RSS image extensions
+            image_url = None
+            
+            # Method 1: RSS media:content (Yahoo Media RSS)
+            media_content = item.find(".//media:content", {"media": "http://search.yahoo.com/mrss/"})
+            if media_content is not None and media_content.get("type", "").startswith("image"):
+                image_url = media_content.get("url")
+            
+            # Method 2: RSS enclosure (for image files)
+            if not image_url:
+                enclosure = item.find("enclosure")
+                if enclosure is not None:
+                    enc_type = enclosure.get("type", "").lower()
+                    if enc_type.startswith("image/"):
+                        image_url = enclosure.get("url")
+            
+            # Method 3: Look for <image> tag
+            if not image_url:
+                image_el = item.find("image")
+                if image_el is not None:
+                    image_url = image_el.text or image_el.get("url")
+            
+            # Method 4: Extract first image from description HTML
+            if not image_url and desc:
+                import re
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', desc, re.IGNORECASE)
+                if img_match:
+                    image_url = img_match.group(1)
+            
             items.append({
                 "title": title or "Untitled",
                 "link": link,
@@ -265,6 +296,7 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
                 "location_str": None,
                 "source": source_label,
                 "source_url": feed_url,
+                "image_url": image_url,
             })
         return items
 
@@ -291,6 +323,28 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
         desc = text(summary_el) if summary_el is not None else ""
         updated_el = entry.find("atom:updated", ns) or entry.find("{http://www.w3.org/2005/Atom}updated") or entry.find("updated")
         pub_date = text(updated_el) if updated_el is not None else ""
+        
+        # Extract image from Atom feeds
+        image_url = None
+        
+        # Method 1: Atom link with rel="enclosure" and type="image/*"
+        for link_el in entry.findall("atom:link", ns) or entry.findall("{http://www.w3.org/2005/Atom}link") or entry.findall("link"):
+            rel = link_el.get("rel", "")
+            link_type = link_el.get("type", "")
+            if rel == "enclosure" and link_type.startswith("image/"):
+                image_url = link_el.get("href")
+                break
+        
+        # Method 2: Extract from content/summary HTML
+        if not image_url:
+            content_el = entry.find("atom:content", ns) or entry.find("{http://www.w3.org/2005/Atom}content") or entry.find("content")
+            content_text = text(content_el) if content_el is not None else desc
+            if content_text:
+                import re
+                img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', content_text, re.IGNORECASE)
+                if img_match:
+                    image_url = img_match.group(1)
+        
         items.append({
             "title": title or "Untitled",
             "link": link,
@@ -299,6 +353,7 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
             "location_str": None,
             "source": source_label,
             "source_url": feed_url,
+            "image_url": image_url,
         })
     return items
 
@@ -371,7 +426,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
             place_name = place.get("name", "")
             events_url = f"{FACEBOOK_GRAPH}/{place_id}/events"
             ep = {
-                "fields": "id,name,description,start_time,end_time,place,link",
+                "fields": "id,name,description,start_time,end_time,place,link,cover",
                 "access_token": access_token,
                 "limit": 5,
             }
@@ -381,6 +436,13 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
             ed = er.json()
             for ev in ed.get("data", [])[:3]:
                 start = ev.get("start_time", "")
+                
+                # Extract cover image if available
+                image_url = None
+                cover = ev.get("cover")
+                if cover and isinstance(cover, dict):
+                    image_url = cover.get("source")
+                
                 events_found.append({
                     "title": ev.get("name", "Event"),
                     "link": ev.get("link") or f"https://www.facebook.com/events/{ev.get('id', '')}",
@@ -390,6 +452,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
                     "source": "Facebook Local",
                     "source_url": "https://www.facebook.com/events",
                     "place_id": ev.get("id"),
+                    "image_url": image_url,
                 })
         return events_found[:limit]
     except Exception as e:
@@ -410,7 +473,7 @@ def fetch_eventbrite_events(lat, lng, radius_km, token, limit=10):
             "location.latitude": lat,
             "location.longitude": lng,
             "location.within": f"{radius_km}km",
-            "expand": "venue",
+            "expand": "venue,logo",
         }
         headers = {"Authorization": f"Bearer {token}"}
         r = requests.get(url, params=params, headers=headers, timeout=4)
@@ -428,6 +491,14 @@ def fetch_eventbrite_events(lat, lng, radius_km, token, limit=10):
             venue = ev.get("venue", {}) or {}
             address = venue.get("address", {}) or {}
             loc_str = address.get("localized_address_display") or venue.get("name", "")
+            
+            # Extract event logo/image if available
+            image_url = None
+            logo = ev.get("logo")
+            if logo and isinstance(logo, dict):
+                # Use original or high-quality image if available
+                image_url = logo.get("original", {}).get("url") or logo.get("url")
+            
             items.append({
                 "title": name,
                 "link": url_ev,
@@ -437,6 +508,7 @@ def fetch_eventbrite_events(lat, lng, radius_km, token, limit=10):
                 "source": "Eventbrite",
                 "source_url": "https://www.eventbrite.com",
                 "place_id": ev.get("id"),
+                "image_url": image_url,
             })
         return items
     except Exception as e:
@@ -498,6 +570,12 @@ def fetch_luma_events(lat, lng, radius_miles=25, limit=10):
                         host_name = calendar.get("name", "")
                         desc = f"Hosted by {host_name}" if host_name else "Luma event"
                         
+                        # Extract cover image if available
+                        image_url = None
+                        cover_url = event_data.get("cover_url")
+                        if cover_url:
+                            image_url = cover_url
+                        
                         items.append({
                             "title": name,
                             "link": url_ev,
@@ -507,6 +585,7 @@ def fetch_luma_events(lat, lng, radius_miles=25, limit=10):
                             "source": "Luma",
                             "source_url": url_ev,
                             "place_id": f"luma_{event_data.get('api_id', '')}",
+                            "image_url": image_url,
                         })
                 except (json.JSONDecodeError, TypeError, KeyError) as e:
                     print(f"[LOCAL_FEEDS] Luma parse error for {city}: {e}")
@@ -1332,7 +1411,7 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         "address": location_str or "",
         "rating": 0,
         "total_ratings": 0,
-        "photo_url": None,
+        "photo_url": item.get("image_url") or item.get("photo_url"),
         "feed_source": source,
         "feed_item": True,
     }

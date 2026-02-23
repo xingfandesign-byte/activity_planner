@@ -414,25 +414,100 @@ def reverse_geocode():
         return jsonify({"error": "Reverse geocoding failed"}), 500
 
 
+def search_free_image(query, timeout=3):
+    """
+    Search for an image using free sources (no API key needed):
+    1. Wikipedia/Wikimedia Commons REST API
+    2. DuckDuckGo Instant Answer API
+    Returns image URL or None if not found.
+    """
+    if not query or len(query) < 2:
+        return None, None
+    
+    cache_key = f"free_img:{query[:100]}"
+    if cache_key in image_search_cache:
+        cached = image_search_cache[cache_key]
+        return cached.get("url"), cached.get("source")
+    
+    url = None
+    source = None
+    
+    # 1. Try Wikipedia/Wikimedia Commons REST API
+    try:
+        # Clean the query - use title part and remove location info
+        wiki_query = query.replace(" San Francisco", "").replace(" SF", "").replace(" CA", "")
+        wiki_query = wiki_query.replace(" Bay Area", "").replace(" Oakland", "").replace(" Berkeley", "")
+        wiki_query = wiki_query.strip()
+        
+        wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_query.replace(' ', '_')}"
+        r = requests.get(wiki_url, timeout=timeout, headers={"User-Agent": "ActivityPlanner/1.0"})
+        
+        if r.status_code == 200:
+            data = r.json()
+            thumbnail = data.get("thumbnail", {})
+            if thumbnail and thumbnail.get("source"):
+                # Get higher resolution version if available
+                img_url = thumbnail["source"]
+                # Try to get larger version by modifying URL
+                if "/thumb/" in img_url:
+                    img_url = img_url.replace("/320px-", "/800px-")
+                url = img_url
+                source = "wikipedia"
+                print(f"[FREE_IMAGE] Found Wikipedia image for '{query}': {url}")
+    except Exception as e:
+        print(f"[FREE_IMAGE] Wikipedia error for '{query}': {e}")
+    
+    # 2. Try DuckDuckGo Instant Answer API
+    if not url:
+        try:
+            ddg_url = "https://api.duckduckgo.com/"
+            r = requests.get(ddg_url, params={"q": query, "format": "json"}, timeout=timeout, 
+                           headers={"User-Agent": "ActivityPlanner/1.0"})
+            
+            if r.status_code == 200:
+                data = r.json()
+                image_url = data.get("Image")
+                if image_url:
+                    # DuckDuckGo sometimes returns relative URLs
+                    if image_url.startswith("//"):
+                        image_url = "https:" + image_url
+                    elif image_url.startswith("/"):
+                        image_url = "https://duckduckgo.com" + image_url
+                    
+                    if image_url.startswith("http"):
+                        url = image_url
+                        source = "duckduckgo"
+                        print(f"[FREE_IMAGE] Found DuckDuckGo image for '{query}': {url}")
+        except Exception as e:
+            print(f"[FREE_IMAGE] DuckDuckGo error for '{query}': {e}")
+    
+    # Cache result (even if None)
+    image_search_cache[cache_key] = {"url": url, "source": source}
+    return url, source
+
+
 @app.route('/v1/image-search', methods=['GET'])
 def image_search():
     """
     Search for an image by query (keywords from title + event detail + location).
-    Uses Google Custom Search API (Google Images) if configured, else Pexels, else Unsplash.
+    Uses free sources first, then Google Custom Search API (Google Images) if configured, else Pexels, else Unsplash.
     Returns first relevant image URL for the location/event.
     """
     query = request.args.get('q', '').strip()
     if not query or len(query) < 2:
         return jsonify({"url": None, "source": None}), 200
 
+    # Try free sources first
+    url, source = search_free_image(query)
+    if url:
+        return jsonify({"url": url, "source": source}), 200
+
     cache_key = f"img:{query[:100]}"
     if cache_key in image_search_cache:
         cached = image_search_cache[cache_key]
         return jsonify({"url": cached.get("url"), "source": cached.get("source")}), 200
 
-    url = None
-    source = None
-
+    # Fallback to paid APIs if configured
     # 1. Try Google Custom Search (Google Images)
     if GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX:
         try:
@@ -709,6 +784,86 @@ def get_recommendations(user_id, prefs):
     return items, sources
 
 
+def enrich_items_with_images(items, max_time_seconds=2):
+    """
+    Enrich recommendation items with real images using free sources.
+    Uses ThreadPoolExecutor to fetch images in parallel without blocking.
+    Limited to max_time_seconds to avoid adding latency.
+    """
+    import concurrent.futures
+    import time
+    
+    start_time = time.time()
+    enriched_items = []
+    
+    def fetch_image_for_item(item):
+        try:
+            title = item.get('title', '')
+            location = item.get('address', '') or item.get('location_str', '')
+            
+            # Build search query: title + location for better results
+            query_parts = [title]
+            if location and location.lower() not in title.lower():
+                # Add city/area for context
+                loc_clean = location.replace(" CA", "").replace(" California", "").split(",")[0].strip()
+                if loc_clean and loc_clean.lower() not in title.lower():
+                    query_parts.append(loc_clean)
+            
+            query = " ".join(query_parts).strip()
+            
+            # Search for image
+            image_url, source = search_free_image(query)
+            
+            # Update item with image if found
+            item_copy = item.copy()
+            if image_url:
+                item_copy['photo_url'] = image_url
+                item_copy['photo_source'] = source
+                print(f"[IMAGE_ENRICH] Found image for '{title}' from {source}")
+            
+            return item_copy
+            
+        except Exception as e:
+            print(f"[IMAGE_ENRICH] Error enriching '{item.get('title', 'item')}': {e}")
+            return item
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # Submit all image search tasks
+        future_to_item = {executor.submit(fetch_image_for_item, item): item for item in items}
+        
+        # Collect results with timeout
+        for future in concurrent.futures.as_completed(future_to_item, timeout=max_time_seconds):
+            try:
+                enriched_item = future.result()
+                enriched_items.append(enriched_item)
+            except concurrent.futures.TimeoutError:
+                # Add original item if timeout
+                original_item = future_to_item[future]
+                enriched_items.append(original_item)
+            except Exception as e:
+                # Add original item if error
+                original_item = future_to_item[future]
+                enriched_items.append(original_item)
+                print(f"[IMAGE_ENRICH] Error processing item: {e}")
+            
+            # Check overall time limit
+            if time.time() - start_time > max_time_seconds:
+                break
+    
+    # Add any remaining items that didn't complete
+    completed_items = len(enriched_items)
+    if completed_items < len(items):
+        remaining_items = items[completed_items:]
+        enriched_items.extend(remaining_items)
+        print(f"[IMAGE_ENRICH] Timeout: enriched {completed_items}/{len(items)} items")
+    
+    elapsed = time.time() - start_time
+    success_count = sum(1 for item in enriched_items if item.get('photo_url'))
+    print(f"[IMAGE_ENRICH] Completed in {elapsed:.1f}s: {success_count}/{len(items)} items got images")
+    
+    return enriched_items
+
+
 def _fetch_recommendations_live(user_id, prefs, cache_key):
     """
     Live fetch from all sources with fallback chain:
@@ -903,6 +1058,10 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
                     final_items.append(item)
                     if len(final_items) >= 15:
                         break
+        
+        # Step 5: Enrich items with real images (parallel, max 2s)
+        print(f"[RECOMMENDATIONS] Enriching {len(final_items)} items with images...")
+        final_items = enrich_items_with_images(final_items, max_time_seconds=2)
         
         # Cache successful results
         if final_items:
