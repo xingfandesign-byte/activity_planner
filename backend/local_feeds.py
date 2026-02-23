@@ -795,6 +795,53 @@ def is_inappropriate_for_group(item, group_type):
     return False
 
 
+def _is_low_quality_item(item):
+    """
+    Filter out low-quality items: generic titles, placeholder content, 
+    very short titles, all-caps spam, etc.
+    Returns True if the item should be excluded.
+    """
+    title = (item.get("title") or "").strip()
+    
+    # Too short or empty
+    if len(title) < 5:
+        return True
+    
+    # Generic/placeholder titles
+    generic_titles = {
+        "untitled", "event", "local event", "test", "no title",
+        "untitled event", "new event", "tbd", "coming soon",
+        "click here", "read more", "learn more", "subscribe",
+        "newsletter", "weekly update", "daily digest",
+    }
+    if title.lower() in generic_titles:
+        return True
+    
+    # All caps (spammy) — but allow short acronyms
+    if len(title) > 10 and title == title.upper() and not re.search(r'\d', title):
+        return True
+    
+    # Mostly numbers or special chars (not a real title)
+    alpha_count = sum(1 for c in title if c.isalpha())
+    if alpha_count < len(title) * 0.3 and len(title) > 5:
+        return True
+    
+    # Spam patterns
+    spam_patterns = [
+        r'^(ad|sponsored|advertisement)',
+        r'click here to',
+        r'subscribe now',
+        r'sign up for',
+        r'download our app',
+    ]
+    title_lower = title.lower()
+    for pattern in spam_patterns:
+        if re.search(pattern, title_lower):
+            return True
+    
+    return False
+
+
 def _fuzzy_title_key(title):
     """Generate a fuzzy key for deduplication — strips noise words, punctuation, whitespace."""
     t = (title or "").lower()
@@ -832,6 +879,12 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
     """
     if not items:
         return []
+    
+    # Filter out low-quality items (generic titles, spam, etc.)
+    before_quality = len(items)
+    items = [item for item in items if not _is_low_quality_item(item)]
+    if len(items) < before_quality:
+        print(f"[RANK] Filtered {before_quality - len(items)} low-quality items")
     
     # Filter out inappropriate content based on group type
     if group_type:
