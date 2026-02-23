@@ -242,6 +242,49 @@ function stopLoadingAnimation() {
     }
 }
 
+// ==================== NETWORK STATUS ====================
+
+let isOffline = !navigator.onLine;
+let retryCount = 0;
+const MAX_RETRIES = 3;
+
+window.addEventListener('online', () => {
+    isOffline = false;
+    retryCount = 0;
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.classList.add('hidden');
+    // Auto-refresh if we were showing an error
+    const container = document.getElementById('dashboard-digest-items');
+    if (container && container.querySelector('.empty-state, [style*="color: #ef4444"]')) {
+        loadDashboardRecommendations();
+    }
+});
+
+window.addEventListener('offline', () => {
+    isOffline = true;
+    showOfflineBanner();
+});
+
+function showOfflineBanner() {
+    let banner = document.getElementById('offline-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'offline-banner';
+        banner.setAttribute('role', 'alert');
+        banner.innerHTML = `
+            <span>📡 You're offline — showing cached results</span>
+            <button onclick="this.parentElement.classList.add('hidden')" aria-label="Dismiss">✕</button>
+        `;
+        document.body.prepend(banner);
+    }
+    banner.classList.remove('hidden');
+}
+
+function getRetryDelay() {
+    // Exponential backoff: 1s, 2s, 4s
+    return Math.min(1000 * Math.pow(2, retryCount), 4000);
+}
+
 // ==================== INITIALIZATION ====================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -616,12 +659,17 @@ async function loadDashboardRecommendations() {
         }
         
         if (container) {
+            const offline = !navigator.onLine;
             container.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: #ef4444;">
-                    <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
-                    <p><strong>Error loading recommendations</strong></p>
-                    <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">Make sure the backend server is running</p>
-                    <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
+                <div class="empty-state" role="alert">
+                    <div class="empty-state-icon">${offline ? '📡' : '⚠️'}</div>
+                    <h3 class="empty-state-title">${offline ? "You're offline" : 'Error loading recommendations'}</h3>
+                    <p class="empty-state-subtitle">${offline
+                        ? 'Check your internet connection and try again.'
+                        : 'Make sure the backend server is running, or try again in a moment.'}</p>
+                    <button class="btn btn-primary" onclick="retryWithBackoff()" style="width: auto; margin-top: 1rem;" id="retry-btn">
+                        Retry
+                    </button>
                 </div>
             `;
         }
@@ -3404,6 +3452,24 @@ function expandTravelTime() {
 }
 
 window.expandTravelTime = expandTravelTime;
+
+function retryWithBackoff() {
+    const btn = document.getElementById('retry-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Retrying...';
+    }
+    retryCount++;
+    if (retryCount > MAX_RETRIES) {
+        retryCount = 0; // Reset for next attempt
+    }
+    const delay = getRetryDelay();
+    setTimeout(() => {
+        refreshRecommendations();
+    }, delay);
+}
+
+window.retryWithBackoff = retryWithBackoff;
 
 // ==================== SHARE ====================
 
