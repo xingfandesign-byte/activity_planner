@@ -2376,6 +2376,7 @@ function createRecommendationCard(item) {
             ${item.event_link ? `<a href="${item.event_link}" target="_blank" rel="noopener" class="btn btn-secondary" onclick="event.stopPropagation();" title="Event Link">🔗</a>` : ''}
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'favorite', event)" title="Favorite">⭐</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'already_been', event)" title="Already been here">✅</button>
+            <button class="btn btn-secondary" onclick="event.stopPropagation(); shareRecommendation('${item.rec_id}')" title="Share">📤</button>
         </div>
     `;
     
@@ -3343,6 +3344,59 @@ async function handleResetPassword() {
         errEl.style.display = 'block';
     }
 }
+
+// ==================== SHARE ====================
+
+async function shareRecommendation(recId) {
+    const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
+    if (!item) return;
+
+    const title = item.title || 'Activity Recommendation';
+    const url = item.event_link || item.source_url || item.google_maps_url || '';
+    const text = `Check out ${title}${item.address ? ' at ' + item.address : ''}`;
+
+    // Try native Web Share API (works great on mobile)
+    if (navigator.share) {
+        try {
+            await navigator.share({ title, text, url });
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return; // user cancelled
+        }
+    }
+
+    // Fallback: copy to clipboard
+    const shareText = url ? `${text}\n${url}` : text;
+    try {
+        await navigator.clipboard.writeText(shareText);
+        showToast('Link copied to clipboard!');
+    } catch {
+        // Last resort: prompt
+        prompt('Copy this link:', shareText);
+    }
+}
+
+function showToast(message, duration = 2500) {
+    // Remove existing toast
+    const existing = document.getElementById('toast-notification');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'toast-notification';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    setTimeout(() => {
+        toast.classList.remove('visible');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+window.shareRecommendation = shareRecommendation;
 
 function clearCache() {
     localStorage.clear();
