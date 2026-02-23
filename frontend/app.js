@@ -576,14 +576,7 @@ async function loadDashboardRecommendations() {
             renderDashboardItems(data.items, data.from_cache, data.sources);
         } else {
             if (container) {
-                container.innerHTML = `
-                    <div style="text-align: center; padding: 2rem; color: #666;">
-                        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
-                        <p><strong>No recommendations found</strong></p>
-                        <p style="margin: 0.5rem 0; font-size: 0.9rem;">Try adjusting your preferences above or check back later</p>
-                        <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Try Again</button>
-                    </div>
-                `;
+                container.innerHTML = buildEmptyState();
             }
         }
     } catch (error) {
@@ -3344,6 +3337,73 @@ async function handleResetPassword() {
         errEl.style.display = 'block';
     }
 }
+
+// ==================== EMPTY STATE ====================
+
+function buildEmptyState() {
+    const suggestions = [];
+    const travelRanges = onboardingData.travel_time_ranges || [];
+    const maxTravel = getMaxTravelTimeMinutes();
+
+    if (maxTravel <= 15) {
+        suggestions.push({
+            icon: '🗺️',
+            text: 'Expand your travel time to 30+ minutes',
+            action: 'expandTravelTime()'
+        });
+    }
+    if ((onboardingData.interests || []).length <= 3) {
+        suggestions.push({
+            icon: '🎯',
+            text: 'Add more interests for wider results',
+            action: 'editPreference("interests")'
+        });
+    }
+    if (onboardingData.budget === 'free') {
+        suggestions.push({
+            icon: '💰',
+            text: 'Include paid activities for more options',
+            action: null
+        });
+    }
+    suggestions.push({
+        icon: '📍',
+        text: 'Try a different location',
+        action: 'editPreference("location")'
+    });
+
+    return `
+        <div class="empty-state" role="status">
+            <div class="empty-state-icon">🔍</div>
+            <h3 class="empty-state-title">No recommendations found</h3>
+            <p class="empty-state-subtitle">Here are some things you can try:</p>
+            <div class="empty-state-suggestions">
+                ${suggestions.map(s => `
+                    <div class="empty-suggestion" ${s.action ? `onclick="${s.action}" style="cursor:pointer"` : ''}>
+                        <span class="empty-suggestion-icon">${s.icon}</span>
+                        <span>${s.text}</span>
+                        ${s.action ? '<span class="empty-suggestion-arrow">→</span>' : ''}
+                    </div>
+                `).join('')}
+            </div>
+            <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1.5rem;">
+                Try Again
+            </button>
+        </div>
+    `;
+}
+
+function expandTravelTime() {
+    // Add 30-60 to travel time ranges
+    const btn30 = document.querySelector('.travel-time-toggles .quick-toggle[data-value="30-60"]');
+    if (btn30 && !btn30.classList.contains('active')) {
+        btn30.classList.add('active');
+    }
+    gatherQuickAdjustments();
+    loadDashboardRecommendations();
+}
+
+window.expandTravelTime = expandTravelTime;
 
 // ==================== SHARE ====================
 
