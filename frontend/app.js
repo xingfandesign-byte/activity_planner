@@ -481,6 +481,17 @@ function setupEventListeners() {
             if (e.target === modal) modal.classList.remove('active');
         });
     });
+
+    // Close modals on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const activeModal = document.querySelector('.modal.active');
+            if (activeModal) {
+                activeModal.classList.remove('active');
+                e.preventDefault();
+            }
+        }
+    });
 }
 
 
@@ -2326,6 +2337,9 @@ function createRecommendationCard(item) {
     const card = document.createElement('div');
     card.className = 'recommendation-card';
     card.style.cursor = 'pointer';
+    card.setAttribute('role', 'article');
+    card.setAttribute('aria-label', item.title);
+    card.setAttribute('tabindex', '0');
     
     // Handle n/a and estimated distances
     const isDistanceNA = item.distance_is_na || item.distance_miles === null;
@@ -2421,9 +2435,15 @@ function createRecommendationCard(item) {
         </div>
     `;
     
-    // Make entire card clickable
+    // Make entire card clickable and keyboard-accessible
     card.addEventListener('click', () => {
         showDetail(item.rec_id);
+    });
+    card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            showDetail(item.rec_id);
+        }
     });
     
     return card;

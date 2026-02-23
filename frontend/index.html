@@ -7,7 +7,8 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="app">
+    <a href="#dashboard-digest-items" class="skip-link">Skip to recommendations</a>
+    <div id="app" role="application">
         <!-- Loading State (shown until JS decides which screen) -->
         <div id="app-loading" class="app-loading">
             <div class="loading-content">
@@ -558,10 +559,10 @@
                 <!-- Recommendations Section -->
                 <div class="dashboard-recommendations">
                     <div class="section-header">
-                        <h3>🎉 Recommended Activities</h3>
-                        <button class="btn-link" onclick="refreshRecommendations()"><span class="refresh-icon">↻</span> Refresh</button>
+                        <h3 id="recommendations-heading">🎉 Recommended Activities</h3>
+                        <button class="btn-link" onclick="refreshRecommendations()" aria-label="Refresh recommendations"><span class="refresh-icon" aria-hidden="true">↻</span> Refresh</button>
                     </div>
-                    <div id="dashboard-digest-items" class="digest-grid">
+                    <div id="dashboard-digest-items" class="digest-grid" role="region" aria-labelledby="recommendations-heading" aria-live="polite">
                         <div class="loading" id="dashboard-loading">Loading recommendations...</div>
                     </div>
                 </div>
@@ -569,9 +570,9 @@
         </div>
         
         <!-- Settings Modal -->
-        <div id="settings-modal" class="modal">
+        <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-label="Settings">
             <div class="modal-content modal-large">
-                <span class="close" onclick="closeSettings()">&times;</span>
+                <span class="close" onclick="closeSettings()" role="button" aria-label="Close settings" tabindex="0">&times;</span>
                 <h2>Settings</h2>
                 
                 <div class="settings-tabs">
@@ -799,9 +800,9 @@
         </div>
         
         <!-- Recommendation Detail Modal -->
-        <div id="detail-modal" class="modal">
+        <div id="detail-modal" class="modal" role="dialog" aria-modal="true" aria-label="Activity details">
             <div class="modal-content">
-                <span class="close">&times;</span>
+                <span class="close" role="button" aria-label="Close" tabindex="0">&times;</span>
                 <div id="detail-content"></div>
             </div>
         </div>
