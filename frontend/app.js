@@ -476,8 +476,27 @@ async function loadDashboardRecommendations() {
     
     if (loading) loading.style.display = 'block';
     
-    // Start personalized loading animation
-    startLoadingAnimation(container);
+    // Show skeleton cards for perceived performance
+    if (container) {
+        container.innerHTML = `
+            <div class="skeleton-cards">
+                ${Array(4).fill('').map(() => `
+                    <div class="recommendation-card skeleton-card">
+                        <div class="skeleton-line skeleton-title"></div>
+                        <div class="skeleton-line skeleton-short"></div>
+                        <div class="skeleton-line skeleton-medium"></div>
+                        <div class="skeleton-line skeleton-short"></div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    // Start personalized loading animation (overlay)
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.id = 'loading-overlay';
+    startLoadingAnimation(loadingOverlay);
+    if (container) container.prepend(loadingOverlay);
     
     try {
         // Build user profile and prompt
@@ -598,6 +617,15 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     if (!container) return;
     
     container.innerHTML = '';
+    
+    // Show response time if available
+    const responseTime = window.currentDigest?.response_time_ms;
+    if (responseTime !== undefined) {
+        const timeIndicator = document.createElement('div');
+        timeIndicator.className = 'response-time-indicator';
+        timeIndicator.textContent = `Loaded in ${responseTime < 1000 ? responseTime + 'ms' : (responseTime / 1000).toFixed(1) + 's'}`;
+        container.appendChild(timeIndicator);
+    }
     
     // Add cache/source indicator if needed
     if (fromCache || sources.includes('cache')) {

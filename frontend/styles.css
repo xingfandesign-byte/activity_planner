@@ -2367,3 +2367,56 @@ header {
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
 }
+
+/* Skeleton loading cards */
+.skeleton-cards {
+    display: grid;
+    gap: 1rem;
+}
+
+.skeleton-card {
+    padding: 1.25rem;
+    opacity: 0.7;
+}
+
+.skeleton-line {
+    height: 14px;
+    border-radius: 4px;
+    margin-bottom: 0.75rem;
+    background: linear-gradient(90deg, #e5e7eb 25%, #d1d5db 50%, #e5e7eb 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+.skeleton-title {
+    width: 70%;
+    height: 20px;
+}
+
+.skeleton-short {
+    width: 40%;
+}
+
+.skeleton-medium {
+    width: 85%;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+#loading-overlay {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    padding: 1rem 0;
+}
+
+/* Response time indicator */
+.response-time-indicator {
+    text-align: right;
+    font-size: 0.75rem;
+    color: #9ca3af;
+    padding: 0.25rem 0;
+}
