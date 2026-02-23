@@ -2580,7 +2580,7 @@ function createRecommendationCard(item) {
         <div class="card-image-container">
             <div class="card-image-placeholder">${placeholderEmoji}</div>
             <img class="card-image" src="${cardImageUrl}" alt="" loading="lazy"
-                 onload="this.classList.add('loaded')"
+                 onload="this.classList.add('loaded'); this.previousElementSibling.style.display='none'"
                  onerror="this.remove()">
         </div>
         <div class="card-header">
