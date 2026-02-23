@@ -536,6 +536,80 @@ def search_free_image(query, event_url=None, timeout=3):
     return url, source
 
 
+def fetch_google_place_photo(title, location, lat=None, lng=None):
+    """
+    Fetch a photo for a place using Google Places Photo API.
+    Returns the direct googleusercontent.com URL (permanent-ish, safe to cache).
+    Returns None if no photo found or API error.
+    """
+    if not GOOGLE_PLACES_API_KEY:
+        return None
+    
+    # Build search query combining title and location
+    query_parts = [title]
+    if location and location.lower() not in title.lower():
+        query_parts.append(location)
+    
+    text_query = " ".join(query_parts).strip()
+    if not text_query:
+        return None
+    
+    try:
+        # Step 1: Search for the place
+        search_url = 'https://places.googleapis.com/v1/places:searchText'
+        headers = {
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.photos'
+        }
+        
+        search_data = {
+            'textQuery': text_query,
+            'maxResultCount': 1
+        }
+        
+        # Add location bias if lat/lng provided
+        if lat is not None and lng is not None:
+            search_data['locationBias'] = {
+                'circle': {
+                    'center': {'latitude': lat, 'longitude': lng},
+                    'radius': 10000  # 10km radius
+                }
+            }
+        
+        response = requests.post(search_url, headers=headers, json=search_data, timeout=2)
+        
+        if response.status_code != 200:
+            print(f"[GOOGLE_PLACES] Search failed for '{text_query}': HTTP {response.status_code}")
+            return None
+        
+        data = response.json()
+        places = data.get('places', [])
+        
+        if not places or not places[0].get('photos'):
+            print(f"[GOOGLE_PLACES] No photos found for '{text_query}'")
+            return None
+        
+        photo_name = places[0]['photos'][0]['name']
+        
+        # Step 2: Get the photo URL (returns 302 redirect)
+        photo_url = f'https://places.googleapis.com/v1/{photo_name}/media?maxWidthPx=800&key={GOOGLE_PLACES_API_KEY}'
+        
+        photo_response = requests.get(photo_url, timeout=1, allow_redirects=False)
+        
+        if photo_response.status_code == 302:
+            redirect_url = photo_response.headers.get('Location')
+            if redirect_url and 'googleusercontent.com' in redirect_url:
+                print(f"[GOOGLE_PLACES] Found photo for '{text_query}': {redirect_url}")
+                return redirect_url
+        
+        print(f"[GOOGLE_PLACES] Photo redirect failed for '{text_query}': HTTP {photo_response.status_code}")
+        return None
+        
+    except Exception as e:
+        print(f"[GOOGLE_PLACES] Error fetching photo for '{text_query}': {e}")
+        return None
+
+
 @app.route('/v1/image-search', methods=['GET'])
 def image_search():
     """
@@ -834,7 +908,7 @@ def get_recommendations(user_id, prefs):
     return items, sources
 
 
-def enrich_items_with_images(items, max_time_seconds=2):
+def enrich_items_with_images(items, max_time_seconds=4):
     """
     Enrich recommendation items with real images using free sources.
     Uses ThreadPoolExecutor to fetch images in parallel without blocking.
@@ -851,6 +925,22 @@ def enrich_items_with_images(items, max_time_seconds=2):
             title = item.get('title', '')
             location = item.get('address', '') or item.get('location_str', '')
             
+            # If item already has a photo, just ensure it has photo_source
+            if item.get('photo_url'):
+                item_copy = item.copy()
+                if not item_copy.get('photo_source'):
+                    # Detect source based on URL pattern
+                    photo_url = item_copy['photo_url']
+                    if 'maps.googleapis.com' in photo_url:
+                        item_copy['photo_source'] = 'google_places_old'
+                    elif 'googleusercontent.com' in photo_url:
+                        item_copy['photo_source'] = 'google_places'
+                    elif 'luma-' in photo_url or 'og:image' in str(item):
+                        item_copy['photo_source'] = 'og:image'
+                    else:
+                        item_copy['photo_source'] = 'unknown'
+                return item_copy
+            
             # Get event URL for og:image scraping
             event_url = item.get('event_link') or item.get('source_url') or item.get('link') or ''
             
@@ -864,14 +954,52 @@ def enrich_items_with_images(items, max_time_seconds=2):
             
             query = " ".join(query_parts).strip()
             
-            # Search for image (tries og:image first, then Wikipedia, then DDG)
-            image_url, source = search_free_image(query, event_url=event_url)
+            # First check SQLite cache
+            cached_url, cached_source = db.get_cached_photo(query)
+            if cached_url:
+                item_copy = item.copy()
+                item_copy['photo_url'] = cached_url
+                item_copy['photo_source'] = cached_source
+                print(f"[IMAGE_ENRICH] Using cached image for '{title}' from {cached_source}")
+                return item_copy
+            
+            # Also check in-memory cache for this session
+            cache_key = f"free_img:{query[:100]}"
+            if cache_key in image_search_cache:
+                cached = image_search_cache[cache_key]
+                cached_url = cached.get("url")
+                cached_source = cached.get("source")
+                if cached_url:
+                    item_copy = item.copy()
+                    item_copy['photo_url'] = cached_url
+                    item_copy['photo_source'] = cached_source
+                    # Also save to SQLite cache
+                    db.cache_photo(query, cached_url, cached_source)
+                    return item_copy
+            
+            image_url = None
+            source = None
+            
+            # Try Google Places Photo API first (if configured)
+            if GOOGLE_PLACES_API_KEY:
+                lat = item.get('latitude') or item.get('lat')
+                lng = item.get('longitude') or item.get('lng')
+                google_url = fetch_google_place_photo(title, location, lat, lng)
+                if google_url:
+                    image_url = google_url
+                    source = "google_places"
+            
+            # Fall back to free sources if Google Places didn't work
+            if not image_url:
+                image_url, source = search_free_image(query, event_url=event_url)
             
             # Update item with image if found
             item_copy = item.copy()
             if image_url:
                 item_copy['photo_url'] = image_url
                 item_copy['photo_source'] = source
+                # Cache the result in SQLite
+                db.cache_photo(query, image_url, source)
                 print(f"[IMAGE_ENRICH] Found image for '{title}' from {source}")
             
             return item_copy
@@ -910,7 +1038,8 @@ def enrich_items_with_images(items, max_time_seconds=2):
     
     elapsed = time.time() - start_time
     success_count = sum(1 for item in enriched_items if item.get('photo_url'))
-    print(f"[IMAGE_ENRICH] Completed in {elapsed:.1f}s: {success_count}/{len(items)} items got images")
+    google_count = sum(1 for item in enriched_items if item.get('photo_source') == 'google_places')
+    print(f"[IMAGE_ENRICH] Completed in {elapsed:.1f}s: {success_count}/{len(items)} items got images ({google_count} from Google Places)")
     
     return enriched_items
 

@@ -6,7 +6,7 @@ Replaces in-memory dicts with a single activity_planner.db file.
 import os
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 # Database file path (default: same directory as this file)
@@ -136,6 +136,14 @@ def init_db():
                 computed_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
+
+            CREATE TABLE IF NOT EXISTS place_photo_cache (
+                query TEXT PRIMARY KEY,
+                photo_url TEXT NOT NULL,
+                source TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_place_photo_cache_fetched ON place_photo_cache(fetched_at);
         """)
     # Add email_verified column if missing (migration for existing DBs)
     with get_conn() as c:
@@ -650,9 +658,44 @@ def invalidate_affinity_cache(user_id):
 
 
 def clean_expired_cache():
-    """Clean up expired cached recommendations."""
+    """Clean up expired cached recommendations and photo cache."""
     from datetime import datetime
     
     now = datetime.now().isoformat()
     with get_conn() as c:
         c.execute("DELETE FROM cached_recommendations WHERE expires_at < ?", (now,))
+        
+        # Clean photo cache older than 30 days
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+        c.execute("DELETE FROM place_photo_cache WHERE fetched_at < ?", (thirty_days_ago,))
+
+
+# ---------- Place photo cache ----------
+
+def get_cached_photo(query):
+    """Get cached photo URL for a place query. Returns (photo_url, source) or (None, None) if not found."""
+    from datetime import datetime, timedelta
+    
+    thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat()
+    
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT photo_url, source FROM place_photo_cache WHERE query = ? AND fetched_at > ?",
+            (query, thirty_days_ago)
+        ).fetchone()
+    
+    if row:
+        return row["photo_url"], row["source"]
+    return None, None
+
+
+def cache_photo(query, photo_url, source):
+    """Cache a photo URL for a place query."""
+    now = datetime.now().isoformat()
+    
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO place_photo_cache (query, photo_url, source, fetched_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(query) DO UPDATE SET photo_url = ?, source = ?, fetched_at = ?",
+            (query, photo_url, source, now, photo_url, source, now)
+        )
