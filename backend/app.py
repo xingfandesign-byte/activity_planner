@@ -1345,8 +1345,6 @@ def get_feeds_config():
         sources.append({"type": "facebook", "label": "Facebook Local"})
     if config.get("eventbrite_token"):
         sources.append({"type": "eventbrite", "label": "Eventbrite"})
-    if config.get("manus_api_key"):
-        sources.append({"type": "manus", "label": "Manus (personalized local feed)"})
     return jsonify({"enabled": True, "sources": sources})
 
 
@@ -3005,7 +3003,6 @@ def api_status():
         "features": {
             "google_places": bool(GOOGLE_PLACES_API_KEY),
             "local_feeds": bool(local_feeds),
-            "manus_api": bool(local_feeds and local_feeds.get_local_feed_config().get("manus_api_key")),
             "caching": True
         },
         "circuit_breakers": {}

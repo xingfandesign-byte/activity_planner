@@ -26,9 +26,6 @@ EVENTBRITE_API = "https://www.eventbriteapi.com/v3"
 MEETUP_API = "https://api.meetup.com"
 # Optional: Luma API
 LUMA_API = "https://api.lu.ma/public/v1"
-# Optional: Manus AI agent for personalized local feed
-MANUS_API_BASE = "https://api.manus.ai/v1"
-
 # 510families.com RSS feed for family events
 FAMILIES_510_RSS = "https://www.510families.com/calendar/feed/"
 
@@ -36,10 +33,6 @@ FAMILIES_510_RSS = "https://www.510families.com/calendar/feed/"
 YELP_API_KEY = os.environ.get("YELP_API_KEY", "").strip() or None
 TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY", "").strip() or None
 TRIPADVISOR_API_KEY = os.environ.get("TRIPADVISOR_API_KEY", "").strip() or None
-
-# Simple in-memory cache for Manus results to avoid hitting rate limits
-_manus_cache = {}  # key: cache_key -> {"items": [...], "timestamp": datetime}
-MANUS_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 # Cache for crawled event descriptions
 _description_cache = {}  # key: url -> {"description": str, "timestamp": datetime}
@@ -139,111 +132,10 @@ def fetch_event_description(url, timeout=5):
         return None
 
 
-def _get_manus_fallback_data(profile):
-    """Return mock local event data when Manus is rate-limited and no cache exists."""
-    interests = (profile or {}).get("interests", [])
-    
-    # Extract user's city/state from their location for more specific venue names
-    loc = (profile or {}).get("location", {})
-    user_city = ""
-    user_state = ""
-    if isinstance(loc, dict):
-        addr = loc.get("formatted_address") or loc.get("input") or ""
-        import re
-        # Try to extract city and state from address
-        city_state_match = re.search(r'([A-Za-z\s]+),\s*([A-Z]{2})', addr)
-        if city_state_match:
-            user_city = city_state_match.group(1).strip()
-            user_state = city_state_match.group(2)
-    
-    # Generate interest-based mock data with location-aware venue names
-    # Distance/travel time will be calculated by geocoding
-    fallback_items = []
-    
-    # Use user's city/state for more accurate geocoding
-    city_suffix = f", {user_city}, {user_state}" if user_city and user_state else (f", {user_state}" if user_state else "")
-    
-    if "arts_culture" in interests or "learning" in interests or not interests:
-        fallback_items.append({
-            "title": "Art Walk",
-            "link": "https://example.com/art-walk",
-            "description": "Explore local galleries and street art in the downtown arts district.",
-            "location_str": f"Downtown Arts District{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/art-walk",
-            "category": "arts_culture",
-            # No hardcoded distance - let geocoding calculate it
-            "price_flag": "free",
-        })
-    
-    if "nature" in interests or "outdoor" in interests or not interests:
-        fallback_items.append({
-            "title": "Local Park Nature Walk",
-            "link": "https://example.com/park",
-            "description": "Enjoy a peaceful morning walk through the local park trails.",
-            "location_str": f"Regional Park{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/park",
-            "category": "nature",
-            "price_flag": "free",
-        })
-    
-    if "food_drink" in interests or not interests:
-        fallback_items.append({
-            "title": "Farmers Market",
-            "link": "https://example.com/farmers-market",
-            "description": "Fresh local produce, artisan goods, and food trucks.",
-            "location_str": f"Farmers Market{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/farmers-market",
-            "category": "food_drink",
-            "price_flag": "$",
-        })
-    
-    if "shopping" in interests:
-        fallback_items.append({
-            "title": "Local Boutique Shopping District",
-            "link": "https://example.com/shopping",
-            "description": "Discover unique finds at local independent shops and boutiques.",
-            "location_str": f"Main Street Shopping District{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/shopping",
-            "category": "shopping",
-            "price_flag": "$$",
-        })
-    
-    if "fitness" in interests or "sports" in interests:
-        fallback_items.append({
-            "title": "Community Fitness in the Park",
-            "link": "https://example.com/fitness",
-            "description": "Free outdoor yoga and fitness classes.",
-            "location_str": f"Recreation Center{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/fitness",
-            "category": "fitness",
-            "price_flag": "free",
-        })
-    
-    # Add a general event if we have few items
-    if len(fallback_items) < 3:
-        fallback_items.append({
-            "title": "Community Festival",
-            "link": "https://example.com/festival",
-            "description": "Family-friendly festival with live music, food, and activities.",
-            "location_str": f"City Center{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/festival",
-            "category": "events",
-            "price_flag": "free",
-        })
-    
-    return fallback_items[:5]
-
-
 def profile_to_prompt(profile):
     """
     Convert user preference dict to a natural-language prompt for personalized
-    local activity recommendations (e.g. for Manus or other agents).
+    local activity recommendations.
     """
     location = "San Francisco, CA"
     if profile:
@@ -1183,7 +1075,7 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
             travel_time_min = None
             print(f"[NORMALIZE] Could not geocode '{search_location}' - distance/travel n/a")
     
-    # Override with provided distance/travel_time if available (e.g. from Manus)
+    # Override with provided distance/travel_time if available
     if item.get("distance_miles") is not None and isinstance(item.get("distance_miles"), (int, float)):
         distance_miles = float(item["distance_miles"])
         travel_time_min = item.get("travel_time_min")
@@ -1252,156 +1144,6 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         "feed_source": source,
         "feed_item": True,
     }
-
-
-def _parse_manus_output_text(text):
-    """Extract JSON array of recommendations from Manus agent output (may be in markdown code block)."""
-    if not text or not text.strip():
-        return []
-    text = text.strip()
-    import json
-    # Try to find JSON array in code block or raw
-    for pattern in (r"```(?:json)?\s*([\s\S]*?)```", r"\[\s*\{[\s\S]*\}\s*\]"):
-        m = re.search(pattern, text)
-        if m:
-            raw = m.group(1).strip() if m.lastindex and m.lastindex >= 1 else m.group(0)
-            try:
-                data = json.loads(raw)
-                if isinstance(data, list):
-                    return data
-            except (json.JSONDecodeError, TypeError):
-                pass
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return []
-
-
-def _get_manus_cache_key(profile):
-    """Generate a cache key from user profile (location + interests)."""
-    loc = profile.get("location", {})
-    loc_str = loc.get("input") or loc.get("formatted_address") or f"{loc.get('lat')},{loc.get('lng')}"
-    interests = ",".join(sorted(profile.get("interests", [])))
-    return f"{loc_str}|{interests}"
-
-
-def fetch_manus_personalized_feed(profile, api_key, poll_interval=3, poll_timeout=90):
-    """
-    Call Manus API with user preference as prompt; poll until task completes;
-    parse output into list of raw items { title, link, description, location_str, source }.
-    Uses in-memory cache to avoid hitting rate limits.
-    """
-    from datetime import datetime
-    
-    if not api_key or not requests:
-        print("[LOCAL_FEEDS] Manus: no api_key or requests module")
-        return []
-    
-    # Check cache first
-    cache_key = _get_manus_cache_key(profile)
-    if cache_key in _manus_cache:
-        cached = _manus_cache[cache_key]
-        age_seconds = (datetime.now() - cached["timestamp"]).total_seconds()
-        if age_seconds < MANUS_CACHE_TTL_SECONDS:
-            print(f"[LOCAL_FEEDS] Manus: returning {len(cached['items'])} cached items (age={int(age_seconds)}s)")
-            return cached["items"]
-        else:
-            print(f"[LOCAL_FEEDS] Manus: cache expired (age={int(age_seconds)}s)")
-    
-    prompt = profile_to_prompt(profile)
-    print(f"[LOCAL_FEEDS] Manus: creating task with prompt ({len(prompt)} chars)")
-    try:
-        r = requests.post(
-            f"{MANUS_API_BASE}/tasks",
-            headers={"accept": "application/json", "content-type": "application/json", "API_KEY": api_key},
-            json={"prompt": prompt, "agentProfile": "manus-1.6"},
-            timeout=15,
-        )
-        print(f"[LOCAL_FEEDS] Manus create task response: {r.status_code}")
-        if r.status_code == 429:
-            # Rate limited - return stale cache if available, else fallback mock data
-            print(f"[LOCAL_FEEDS] Manus rate limited (429): {r.text[:200]}")
-            if cache_key in _manus_cache:
-                cached = _manus_cache[cache_key]
-                print(f"[LOCAL_FEEDS] Manus: returning {len(cached['items'])} stale cached items due to rate limit")
-                return cached["items"]
-            # Return fallback mock data when rate limited and no cache
-            print("[LOCAL_FEEDS] Manus: returning fallback mock data due to rate limit")
-            return _get_manus_fallback_data(profile)
-        if r.status_code != 200:
-            print(f"[LOCAL_FEEDS] Manus create task error: {r.status_code} {r.text[:500]}")
-            return []
-        data = r.json()
-        task_id = data.get("task_id")
-        print(f"[LOCAL_FEEDS] Manus task_id: {task_id}")
-        if not task_id:
-            print(f"[LOCAL_FEEDS] Manus response missing task_id: {data}")
-            return []
-        # Poll until completed or timeout
-        elapsed = 0
-        print(f"[LOCAL_FEEDS] Manus: polling task {task_id} (timeout={poll_timeout}s)")
-        while elapsed < poll_timeout:
-            tr = requests.get(
-                f"{MANUS_API_BASE}/tasks/{task_id}",
-                headers={"accept": "application/json", "API_KEY": api_key},
-                timeout=10,
-            )
-            if tr.status_code != 200:
-                print(f"[LOCAL_FEEDS] Manus poll error: {tr.status_code}")
-                break
-            task = tr.json()
-            status = task.get("status", "")
-            print(f"[LOCAL_FEEDS] Manus task status: {status} (elapsed={elapsed}s)")
-            if status == "completed":
-                output = task.get("output") or []
-                all_text = []
-                for msg in output:
-                    for c in msg.get("content") or []:
-                        if c.get("type") == "output_text" and c.get("text"):
-                            all_text.append(c["text"])
-                text = "\n".join(all_text)
-                print(f"[LOCAL_FEEDS] Manus output text length: {len(text)}")
-                arr = _parse_manus_output_text(text)
-                print(f"[LOCAL_FEEDS] Manus parsed {len(arr)} items")
-                raw_items = []
-                for i, obj in enumerate(arr):
-                    if not isinstance(obj, dict):
-                        continue
-                    title = obj.get("title") or obj.get("name") or ""
-                    if not title:
-                        continue
-                    raw_items.append({
-                        "title": title,
-                        "link": obj.get("link") or obj.get("url") or "",
-                        "description": obj.get("explanation") or obj.get("description") or "",
-                        "location_str": obj.get("address") or "",
-                        "source": "Manus",
-                        "source_url": obj.get("link") or obj.get("url") or "https://manus.im",
-                        "category": obj.get("category") or "events",
-                        "distance_miles": obj.get("distance_miles"),
-                        "travel_time_min": obj.get("travel_time_min"),
-                        "price_flag": obj.get("price_flag") or "$",
-                        "kid_friendly": obj.get("kid_friendly", False),
-                    })
-                # Cache successful results
-                if raw_items:
-                    _manus_cache[cache_key] = {"items": raw_items, "timestamp": datetime.now()}
-                    print(f"[LOCAL_FEEDS] Manus: cached {len(raw_items)} items for key {cache_key[:30]}...")
-                return raw_items
-            if status == "failed":
-                print(f"[LOCAL_FEEDS] Manus task failed: {task.get('error', '')[:200]}")
-                return []
-            import time
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-        print("[LOCAL_FEEDS] Manus task timed out")
-        return []
-    except Exception as e:
-        print(f"[LOCAL_FEEDS] Manus error: {e}")
-        return []
 
 
 # ========== NEW DATA SOURCES ==========
@@ -2068,7 +1810,6 @@ def get_local_feed_config():
     LOCAL_FEED_LABELS: optional comma-separated labels (same order as URLs)
     FACEBOOK_ACCESS_TOKEN: optional token for Facebook events
     EVENTBRITE_TOKEN: optional token for Eventbrite
-    MANUS_API_KEY: optional token for Manus AI personalized local feed
     YELP_API_KEY: optional Yelp Fusion API key
     TICKETMASTER_API_KEY: optional Ticketmaster Discovery API key
     TRIPADVISOR_API_KEY: optional TripAdvisor Content API key
@@ -2084,7 +1825,6 @@ def get_local_feed_config():
         "feed_configs": feed_configs,
         "facebook_token": os.environ.get("FACEBOOK_ACCESS_TOKEN", "").strip() or None,
         "eventbrite_token": os.environ.get("EVENTBRITE_TOKEN", "").strip() or None,
-        "manus_api_key": os.environ.get("MANUS_API_KEY", "").strip() or None,
         "yelp_api_key": YELP_API_KEY,
         "ticketmaster_api_key": TICKETMASTER_API_KEY,
         "tripadvisor_api_key": TRIPADVISOR_API_KEY,
@@ -2103,7 +1843,6 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     rank by relevance, filter by travel/radius, and return top items.
     
     Sources:
-    - Manus AI (personalized recommendations)
     - Luma (lu.ma events)
     - Meetup (local meetups)
     - 510families.com (family events - East Bay)
@@ -2119,16 +1858,6 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     user_interests = (profile or {}).get("interests", [])
 
     print(f"[LOCAL_FEEDS] Fetching from all sources for ({user_lat}, {user_lng}), radius={radius_miles}mi (parallel)")
-
-    def _fetch_manus():
-        if not config.get("manus_api_key"):
-            return []
-        try:
-            # Shorter timeout (15s) and poll (1s) so we return within fetch window; other sources fill in
-            return fetch_manus_personalized_feed(profile, config["manus_api_key"], poll_interval=1, poll_timeout=15)
-        except Exception as e:
-            print(f"[LOCAL_FEEDS] Manus error: {e}")
-            return []
 
     def _fetch_luma():
         try:
@@ -2250,11 +1979,7 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
         _fetch_yelp, _fetch_ticketmaster, _fetch_osm, _fetch_eventbrite_pub,
         _fetch_patch, _fetch_tripadvisor, _fetch_alltrails, _fetch_parks_rec,
     ]
-    if config.get("manus_api_key"):
-        tasks.insert(0, _fetch_manus)
-
-    # Early return: stop waiting after 18s so we return fast with Luma/Meetup/RSS results.
-    # Manus can take 20–45s; don't block the whole response on it.
+    # Early return: stop waiting after 18s so we return fast with available results.
     FETCH_TIMEOUT = 18
     with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
