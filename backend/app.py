@@ -505,6 +505,80 @@ def image_search():
 
 # ========== RECOMMENDATIONS ==========
 
+# ========== USER AFFINITY / PERSONALIZATION ==========
+
+def get_user_affinity_scores(user_id):
+    """
+    Compute category affinity scores from user behavior.
+    Weights: saves (strong+), visits (moderate+), thumbs_up (strong+), thumbs_down (negative), clicks (weak+).
+    Returns dict like {"parks": 0.8, "food": 0.3, "museums": -0.2} or {} for new users.
+    Cached per user, recomputed hourly or on new interaction.
+    """
+    # Check cache first
+    cached = db.get_affinity_cache(user_id)
+    if cached is not None:
+        return cached
+
+    affinity = {}
+
+    def _add(category, weight):
+        if category:
+            affinity[category] = affinity.get(category, 0.0) + weight
+
+    # Saves: strong positive (+0.3 each)
+    saved = db.get_saved_list(user_id)
+    for s in saved:
+        # Need category - look up from mock or recent recs
+        cat = _get_category_for_place(user_id, s['place_id'])
+        _add(cat, 0.3)
+
+    # Visits: moderate positive (+0.2 each)
+    visited = db.get_visited_list(user_id)
+    for v in visited:
+        cat = _get_category_for_place(user_id, v['place_id'])
+        _add(cat, 0.2)
+
+    # Feedback: thumbs_up (+0.4), thumbs_down (-0.5)
+    feedback = db.get_all_feedback(user_id)
+    for f in feedback:
+        cat = f.get('category') or _get_category_for_place(user_id, f['place_id'])
+        if f['feedback_type'] == 'thumbs_up':
+            _add(cat, 0.4)
+        elif f['feedback_type'] == 'thumbs_down':
+            _add(cat, -0.5)
+
+    # Clicks: weak positive (+0.1 each)
+    click_counts = db.get_click_counts_by_category(user_id)
+    for cat, cnt in click_counts.items():
+        _add(cat, 0.1 * min(cnt, 10))  # Cap at 10 clicks
+
+    # Normalize to [-1, 1] range
+    if affinity:
+        max_abs = max(abs(v) for v in affinity.values()) or 1.0
+        if max_abs > 1.0:
+            affinity = {k: round(v / max_abs, 2) for k, v in affinity.items()}
+        else:
+            affinity = {k: round(v, 2) for k, v in affinity.items()}
+
+    # Cache result
+    db.set_affinity_cache(user_id, affinity)
+    return affinity
+
+
+def _get_category_for_place(user_id, place_id):
+    """Look up category for a place_id from mock data or cached recommendations."""
+    # Check mock data
+    for p in MOCK_PLACES:
+        if p.get('place_id') == place_id:
+            return p.get('category')
+    # Check warm cache
+    for cache_entry in _warm_cache.values():
+        for item in cache_entry.get('items', []):
+            if item.get('place_id') == place_id:
+                return item.get('category')
+    return None
+
+
 # ========== CIRCUIT BREAKER PATTERN ==========
 
 def is_circuit_open(source):
@@ -770,6 +844,9 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         
         print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
         
+        # Get user affinity scores for personalized re-ranking
+        user_affinity = get_user_affinity_scores(user_id)
+
         # Score and rank all items together
         def _item_score(item):
             score = 0
@@ -795,6 +872,12 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
             # Free is a plus
             if (item.get('price_flag') or '').lower() == 'free':
                 score += 3
+            # Personalization: apply affinity multiplier
+            if user_affinity:
+                cat = item.get('category', '')
+                affinity_val = user_affinity.get(cat, 0.0)
+                # Affinity ranges [-1, 1], apply as bonus/penalty (up to ±15 points)
+                score += affinity_val * 15
             return score
         
         filtered_items.sort(key=_item_score, reverse=True)
@@ -1483,6 +1566,203 @@ def get_feeds_config():
     return jsonify({"enabled": True, "sources": sources})
 
 
+# ========== PERSONALIZATION ENGINE ==========
+
+def get_user_affinity_scores(user_id):
+    """
+    Analyze user behavior to compute category affinity scores.
+    Returns dict like {"parks": 0.8, "food": 0.3, "museums": -0.2}
+    """
+    # Check cache first (recompute if older than 1 hour)
+    with db.get_conn() as c:
+        row = c.execute(
+            "SELECT affinity_json, computed_at FROM user_affinity_cache WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+        
+        if row:
+            try:
+                computed_at = datetime.fromisoformat(row["computed_at"])
+                age_hours = (datetime.now() - computed_at).total_seconds() / 3600
+                if age_hours < 1:  # Cache valid for 1 hour
+                    return json.loads(row["affinity_json"])
+            except (ValueError, json.JSONDecodeError):
+                pass
+    
+    # Compute affinity scores from user behavior
+    affinity_scores = {}
+    
+    # Get user interactions
+    saved_places = db.get_saved_list(user_id)
+    visited_places = db.get_visited_list(user_id)
+    
+    # Get feedback (thumb up/down)
+    feedback_data = []
+    with db.get_conn() as c:
+        feedback_rows = c.execute(
+            "SELECT place_id, category, feedback_type FROM feedback WHERE user_id = ?",
+            (user_id,)
+        ).fetchall()
+        feedback_data = [dict(row) for row in feedback_rows]
+    
+    # Get click tracking data
+    click_data = []
+    with db.get_conn() as c:
+        click_rows = c.execute(
+            "SELECT place_id, category FROM click_tracking WHERE user_id = ?",
+            (user_id,)
+        ).fetchall()
+        click_data = [dict(row) for row in click_rows]
+    
+    # Initialize category scores
+    categories = ["parks", "museums", "food", "attractions", "events", "shopping", "entertainment", "arts", "nature"]
+    for category in categories:
+        affinity_scores[category] = 0.0
+    
+    # Analyze saved places (strong positive signal: +0.5)
+    for saved in saved_places:
+        place_id = saved['place_id']
+        category = _get_place_category(place_id)
+        if category:
+            affinity_scores[category] = affinity_scores.get(category, 0.0) + 0.5
+    
+    # Analyze visited places (moderate positive signal: +0.2)
+    for visited in visited_places:
+        place_id = visited['place_id']
+        category = _get_place_category(place_id)
+        if category:
+            affinity_scores[category] = affinity_scores.get(category, 0.0) + 0.2
+    
+    # Analyze feedback
+    for feedback in feedback_data:
+        category = feedback.get('category')
+        feedback_type = feedback.get('feedback_type')
+        if category:
+            if feedback_type == 'thumbs_up':
+                affinity_scores[category] = affinity_scores.get(category, 0.0) + 0.3
+            elif feedback_type == 'thumbs_down':
+                affinity_scores[category] = affinity_scores.get(category, 0.0) - 0.4
+    
+    # Analyze clicks (weak positive signal: +0.1)
+    for click in click_data:
+        category = click.get('category')
+        if category:
+            affinity_scores[category] = affinity_scores.get(category, 0.0) + 0.1
+    
+    # Normalize scores to [-1, 1] range
+    if affinity_scores:
+        max_abs_score = max(abs(score) for score in affinity_scores.values())
+        if max_abs_score > 1.0:
+            for category in affinity_scores:
+                affinity_scores[category] = affinity_scores[category] / max_abs_score
+    
+    # Cache the results
+    now = datetime.now().isoformat()
+    affinity_json = json.dumps(affinity_scores)
+    with db.get_conn() as c:
+        c.execute(
+            "INSERT INTO user_affinity_cache (user_id, affinity_json, computed_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET affinity_json = ?, computed_at = ?",
+            (user_id, affinity_json, now, affinity_json, now)
+        )
+    
+    print(f"[PERSONALIZATION] Computed affinity scores for user {user_id}: {affinity_scores}")
+    return affinity_scores
+
+
+def _get_place_category(place_id):
+    """Get category for a place_id from mock data or database."""
+    # Check mock data first
+    for place in MOCK_PLACES:
+        if place.get('place_id') == place_id:
+            return place.get('category')
+    
+    # In production, you might query a places database
+    # For now, try to infer from place_id
+    place_id_lower = place_id.lower()
+    if 'park' in place_id_lower:
+        return 'parks'
+    elif 'museum' in place_id_lower:
+        return 'museums'
+    elif 'restaurant' in place_id_lower or 'food' in place_id_lower:
+        return 'food'
+    elif 'attraction' in place_id_lower:
+        return 'attractions'
+    
+    return 'attractions'  # Default fallback
+
+
+def apply_personalization_ranking(items, user_id):
+    """
+    Apply personalization multipliers to recommendation items based on user affinity scores.
+    Modifies items in place with updated scores.
+    """
+    if not items:
+        return items
+    
+    # Get user affinity scores
+    affinity_scores = get_user_affinity_scores(user_id)
+    if not affinity_scores:
+        print(f"[PERSONALIZATION] No affinity scores for user {user_id}, using base ranking")
+        return items
+    
+    print(f"[PERSONALIZATION] Applying personalization for user {user_id}")
+    
+    # Apply affinity multipliers
+    for item in items:
+        category = item.get('category', 'attractions')
+        affinity = affinity_scores.get(category, 0.0)
+        
+        # Base score (from existing logic)
+        base_score = _calculate_base_score(item)
+        
+        # Apply affinity multiplier (affinity ranges from -1 to 1)
+        # Positive affinity boosts score, negative affinity reduces it
+        multiplier = 1.0 + (affinity * 0.5)  # Adjust strength as needed
+        personalized_score = base_score * multiplier
+        
+        # Store both scores for debugging
+        item['_base_score'] = base_score
+        item['_personalized_score'] = personalized_score
+        item['_affinity'] = affinity
+    
+    # Sort by personalized score
+    items.sort(key=lambda x: x.get('_personalized_score', 0), reverse=True)
+    
+    print(f"[PERSONALIZATION] Applied personalization to {len(items)} items")
+    return items
+
+
+def _calculate_base_score(item):
+    """Calculate base score for an item (same logic as before personalization)."""
+    score = 0
+    
+    # Strong bonus for items with distance data
+    if item.get('distance_miles') is not None:
+        score += 30
+        # Closer items score higher
+        d = item.get('distance_miles', 50)
+        if d <= 5:
+            score += 15
+        elif d <= 10:
+            score += 10
+        elif d <= 20:
+            score += 5
+    
+    # Rating bonus
+    score += (item.get('rating', 0) or 0) * 5
+    
+    # Events with dates are more actionable
+    if item.get('event_date'):
+        score += 5
+    
+    # Free is a plus
+    if (item.get('price_flag') or '').lower() == 'free':
+        score += 3
+    
+    return score
+
+
 # ========== AI-POWERED RECOMMENDATIONS ==========
 
 @app.route('/v1/recommendations/ai', methods=['POST'])
@@ -1583,6 +1863,26 @@ def submit_feedback():
                 place_id = rec['place_id']
                 break
     
+    # Handle thumbs up/down feedback
+    if action in ("thumbs_up", "thumbs_down") and place_id:
+        # Get category from the recommendation item
+        category = data.get('category')
+        if not category:
+            # Try to find from current digest
+            for rec in db.get_recent_recommendations_list(user_id):
+                if rec['rec_id'] == rec_id:
+                    category = _get_category_for_place(user_id, rec['place_id'])
+                    break
+        db.add_feedback(user_id, place_id, action, rec_id=rec_id, category=category)
+        print(f"[FEEDBACK] User {user_id} gave {action} to {place_id} (category: {category})")
+        return jsonify({"status": "recorded", "action": action})
+
+    # Handle remove thumbs feedback
+    if action == "remove_feedback" and place_id:
+        db.remove_feedback(user_id, place_id)
+        print(f"[FEEDBACK] User {user_id} removed feedback for {place_id}")
+        return jsonify({"status": "recorded", "action": action})
+
     # Handle "already_been" action - add to visited list
     if action == "already_been" and place_id:
         if not db.visited_contains(user_id, place_id):
@@ -1606,6 +1906,82 @@ def submit_feedback():
         print(f"[FEEDBACK] User {user_id} unsaved {place_id}")
     
     return jsonify({"status": "recorded", "action": action})
+
+
+@app.route('/v1/track/click', methods=['POST'])
+@require_auth
+def track_click():
+    """Track when user clicks on a recommendation card"""
+    user_id = get_user_id()
+    data = request.json
+    place_id = data.get('place_id')
+    rec_id = data.get('rec_id')
+    
+    if not place_id:
+        return jsonify({"error": "Missing place_id"}), 400
+    
+    category = _get_place_category(place_id)
+    
+    # Store click in database using the existing db function
+    db.add_click(user_id, place_id, rec_id=rec_id, category=category)
+    
+    print(f"[CLICK_TRACKING] User {user_id} clicked on {place_id} (category: {category})")
+    
+    return jsonify({"status": "tracked"})
+
+
+@app.route('/v1/user/affinity', methods=['GET'])
+@require_auth
+def get_user_affinity():
+    """Get user's learned category preferences/affinities"""
+    user_id = get_user_id()
+    
+    # Get affinity scores
+    affinity_scores = get_user_affinity_scores(user_id)
+    
+    # Get supporting data
+    saved_count = len(db.get_saved_list(user_id))
+    visited_count = len(db.get_visited_list(user_id))
+    feedback_counts = db.get_click_counts_by_category(user_id) if hasattr(db, 'get_click_counts_by_category') else {}
+    
+    # Format response
+    preferences = []
+    for category, score in affinity_scores.items():
+        if score != 0.0:  # Only show categories with some signal
+            preferences.append({
+                "category": category,
+                "score": round(score, 2),
+                "level": "strong" if abs(score) > 0.4 else "moderate" if abs(score) > 0.1 else "weak",
+                "sentiment": "positive" if score > 0 else "negative" if score < 0 else "neutral"
+            })
+    
+    # Sort by absolute score (strongest preferences first)
+    preferences.sort(key=lambda x: abs(x['score']), reverse=True)
+    
+    return jsonify({
+        "user_id": user_id,
+        "preferences": preferences,
+        "stats": {
+            "saved_places": saved_count,
+            "visited_places": visited_count,
+            "interactions": saved_count + visited_count + sum(feedback_counts.values())
+        }
+    })
+
+
+@app.route('/v1/user/affinity/reset', methods=['POST'])
+@require_auth
+def reset_user_affinity():
+    """Reset user's learned preferences (clear interaction history)"""
+    user_id = get_user_id()
+    
+    # Clear the affinity cache
+    db.invalidate_affinity_cache(user_id)
+    
+    print(f"[AFFINITY] Reset affinity scores for user {user_id}")
+    
+    return jsonify({"status": "reset", "message": "Your learned preferences have been reset"})
+
 
 # ========== VISITED HISTORY ==========
 
@@ -2859,6 +3235,60 @@ def api_status():
         }
     
     return jsonify(status)
+
+
+@app.route('/v1/profile/interests', methods=['GET'])
+@require_auth
+def get_interest_profile():
+    """Get learned user interest profile (affinity scores)."""
+    user_id = get_user_id()
+    affinity = get_user_affinity_scores(user_id)
+
+    # Get raw signal counts for transparency
+    saved_count = len(db.get_saved_list(user_id))
+    visited_count = len(db.get_visited_list(user_id))
+    feedback = db.get_all_feedback(user_id)
+    thumbs_up_count = sum(1 for f in feedback if f['feedback_type'] == 'thumbs_up')
+    thumbs_down_count = sum(1 for f in feedback if f['feedback_type'] == 'thumbs_down')
+    click_counts = db.get_click_counts_by_category(user_id)
+    total_clicks = sum(click_counts.values())
+
+    return jsonify({
+        "affinity_scores": affinity,
+        "signals": {
+            "saved": saved_count,
+            "visited": visited_count,
+            "thumbs_up": thumbs_up_count,
+            "thumbs_down": thumbs_down_count,
+            "clicks": total_clicks,
+            "clicks_by_category": click_counts
+        }
+    })
+
+
+@app.route('/v1/profile/interests/reset', methods=['POST'])
+@require_auth
+def reset_interest_profile():
+    """Reset user's learned preferences."""
+    user_id = get_user_id()
+    db.invalidate_affinity_cache(user_id)
+    # Optionally clear all feedback
+    clear_feedback = (request.json or {}).get('clear_feedback', False)
+    if clear_feedback:
+        with db.get_conn() as c:
+            c.execute("DELETE FROM feedback WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM click_tracking WHERE user_id = ?", (user_id,))
+    return jsonify({"status": "reset"})
+
+
+@app.route('/v1/feedback/status', methods=['GET'])
+@require_auth
+def get_feedback_status():
+    """Get feedback status for all items in current digest (for UI state)."""
+    user_id = get_user_id()
+    feedback = db.get_all_feedback(user_id)
+    result = {f['place_id']: f['feedback_type'] for f in feedback}
+    return jsonify({"feedback": result})
 
 
 @app.route('/health', methods=['GET'])

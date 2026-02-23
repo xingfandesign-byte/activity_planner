@@ -106,6 +106,36 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_cached_recs_user ON cached_recommendations(user_id);
             CREATE INDEX IF NOT EXISTS idx_cached_recs_expires ON cached_recommendations(expires_at);
+
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                place_id TEXT NOT NULL,
+                rec_id TEXT,
+                feedback_type TEXT NOT NULL,
+                category TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id);
+
+            CREATE TABLE IF NOT EXISTS click_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                place_id TEXT NOT NULL,
+                rec_id TEXT,
+                category TEXT,
+                clicked_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_click_tracking_user ON click_tracking(user_id);
+
+            CREATE TABLE IF NOT EXISTS user_affinity_cache (
+                user_id TEXT PRIMARY KEY,
+                affinity_json TEXT NOT NULL,
+                computed_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
         """)
     # Add email_verified column if missing (migration for existing DBs)
     with get_conn() as c:
@@ -514,6 +544,109 @@ def get_cached_recommendations(user_id, cache_key):
         }
     except (json.JSONDecodeError, TypeError):
         return None
+
+
+# ---------- Feedback (thumbs up/down) ----------
+
+def add_feedback(user_id, place_id, feedback_type, rec_id=None, category=None):
+    """Add thumbs up/down feedback. feedback_type: 'thumbs_up' or 'thumbs_down'."""
+    now = datetime.now().isoformat()
+    with get_conn() as c:
+        # Remove any existing feedback for this user+place (toggle behavior)
+        c.execute("DELETE FROM feedback WHERE user_id = ? AND place_id = ?", (user_id, place_id))
+        c.execute(
+            "INSERT INTO feedback (user_id, place_id, rec_id, feedback_type, category, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, place_id, rec_id, feedback_type, category, now)
+        )
+    # Invalidate affinity cache
+    invalidate_affinity_cache(user_id)
+
+
+def get_feedback(user_id, place_id):
+    """Get feedback for a specific place. Returns 'thumbs_up', 'thumbs_down', or None."""
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT feedback_type FROM feedback WHERE user_id = ? AND place_id = ?",
+            (user_id, place_id)
+        ).fetchone()
+    return row["feedback_type"] if row else None
+
+
+def get_all_feedback(user_id):
+    """Get all feedback for a user."""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT place_id, feedback_type, category, created_at FROM feedback WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_feedback(user_id, place_id):
+    with get_conn() as c:
+        c.execute("DELETE FROM feedback WHERE user_id = ? AND place_id = ?", (user_id, place_id))
+    invalidate_affinity_cache(user_id)
+
+
+# ---------- Click tracking ----------
+
+def add_click(user_id, place_id, rec_id=None, category=None):
+    now = datetime.now().isoformat()
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO click_tracking (user_id, place_id, rec_id, category, clicked_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, place_id, rec_id, category, now)
+        )
+
+
+def get_click_counts_by_category(user_id):
+    """Get click counts grouped by category."""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT category, COUNT(*) as cnt FROM click_tracking WHERE user_id = ? AND category IS NOT NULL GROUP BY category",
+            (user_id,)
+        ).fetchall()
+    return {r["category"]: r["cnt"] for r in rows}
+
+
+# ---------- User affinity cache ----------
+
+def get_affinity_cache(user_id):
+    """Get cached affinity scores. Returns dict or None if expired/missing."""
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT affinity_json, computed_at FROM user_affinity_cache WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+    if not row:
+        return None
+    # Check if older than 1 hour
+    try:
+        computed = datetime.fromisoformat(row["computed_at"])
+        if (datetime.now() - computed).total_seconds() > 3600:
+            return None
+    except (ValueError, TypeError):
+        return None
+    try:
+        return json.loads(row["affinity_json"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def set_affinity_cache(user_id, affinity):
+    now = datetime.now().isoformat()
+    affinity_json = json.dumps(affinity)
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO user_affinity_cache (user_id, affinity_json, computed_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET affinity_json = ?, computed_at = ?",
+            (user_id, affinity_json, now, affinity_json, now)
+        )
+
+
+def invalidate_affinity_cache(user_id):
+    with get_conn() as c:
+        c.execute("DELETE FROM user_affinity_cache WHERE user_id = ?", (user_id,))
 
 
 def clean_expired_cache():

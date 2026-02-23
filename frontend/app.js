@@ -1804,6 +1804,10 @@ function showSettingsTab(tab) {
         loadSavedPlaces();
     } else if (tab === 'been') {
         loadBeenPlaces();
+    } else if (tab === 'interests') {
+        loadAffinityScores();
+    } else if (tab === 'interests') {
+        loadInterestProfile();
     }
 }
 
@@ -1836,6 +1840,124 @@ function saveNotificationSettings() {
     };
     localStorage.setItem('notification_settings', JSON.stringify(settings));
     alert('Notification preferences saved!');
+}
+
+async function loadAffinityScores() {
+    const loadingEl = document.getElementById('affinity-loading');
+    const contentEl = document.getElementById('affinity-content');
+    const listEl = document.getElementById('affinity-list');
+    const statsEl = document.getElementById('affinity-stats');
+    const authToken = localStorage.getItem('auth_token');
+    
+    if (!authToken) {
+        listEl.innerHTML = '<div class="list-auth-needed">Sign in to see your learned preferences</div>';
+        statsEl.innerHTML = '';
+        return;
+    }
+    
+    loadingEl.style.display = 'block';
+    contentEl.style.display = 'none';
+    
+    try {
+        const response = await fetch(`${API_BASE}/user/affinity`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            displayAffinityScores(data);
+        } else {
+            listEl.innerHTML = '<div class="list-error">Failed to load preferences</div>';
+            statsEl.innerHTML = '';
+        }
+    } catch (error) {
+        console.error('Error loading affinity scores:', error);
+        listEl.innerHTML = '<div class="list-error">Failed to load preferences</div>';
+        statsEl.innerHTML = '';
+    } finally {
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'block';
+    }
+}
+
+function displayAffinityScores(data) {
+    const listEl = document.getElementById('affinity-list');
+    const statsEl = document.getElementById('affinity-stats');
+    const { preferences = [], stats = {} } = data;
+    
+    if (preferences.length === 0) {
+        listEl.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🎯</div>
+                <p>No learned preferences yet</p>
+                <p class="empty-hint">Use thumbs up/down, save places, and mark places as visited to build your preference profile</p>
+            </div>
+        `;
+        statsEl.innerHTML = '';
+        return;
+    }
+    
+    // Display preference items
+    listEl.innerHTML = preferences.map(pref => {
+        const barWidth = Math.abs(pref.score) * 100; // score is [-1, 1]
+        return `
+            <div class="affinity-item ${pref.sentiment}">
+                <div class="affinity-category">${pref.category}</div>
+                <div class="affinity-score">
+                    <div class="affinity-bar">
+                        <div class="affinity-bar-fill ${pref.sentiment}" style="width: ${barWidth}%"></div>
+                    </div>
+                    <div class="affinity-value">${pref.score > 0 ? '+' : ''}${pref.score}</div>
+                    <div class="affinity-level ${pref.level}">${pref.level}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Display stats
+    statsEl.innerHTML = `
+        <h4>📊 Your Activity Summary</h4>
+        <div class="affinity-stats-grid">
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.saved_places || 0}</span>
+                <span class="affinity-stat-label">Saved</span>
+            </div>
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.visited_places || 0}</span>
+                <span class="affinity-stat-label">Visited</span>
+            </div>
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.interactions || 0}</span>
+                <span class="affinity-stat-label">Total</span>
+            </div>
+        </div>
+    `;
+}
+
+async function resetAffinityScores() {
+    if (!confirm('Are you sure you want to reset your learned preferences? This will clear your personalization data.')) {
+        return;
+    }
+    
+    const authToken = localStorage.getItem('auth_token');
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/user/affinity/reset`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            alert('Your learned preferences have been reset successfully.');
+            loadAffinityScores(); // Reload the display
+        } else {
+            alert('Failed to reset preferences. Please try again.');
+        }
+    } catch (error) {
+        console.error('Error resetting affinity scores:', error);
+        alert('Failed to reset preferences. Please try again.');
+    }
 }
 
 async function loadSavedPlaces() {
@@ -2298,6 +2420,8 @@ async function loadDigest() {
         
         if (data.items && data.items.length > 0) {
             renderDigestItems(data.items, data.from_cache, data.sources);
+            // Restore thumbs feedback button states
+            loadFeedbackStatus();
         } else {
             if (itemsContainer) {
                 itemsContainer.innerHTML = `
@@ -2475,6 +2599,8 @@ function createRecommendationCard(item) {
         <div class="card-actions">
             <button class="btn btn-primary" onclick="event.stopPropagation(); showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
             ${item.event_link ? `<a href="${item.event_link}" target="_blank" rel="noopener" class="btn btn-secondary" onclick="event.stopPropagation();" title="Event Link">🔗</a>` : ''}
+            <button class="btn btn-secondary feedback-btn" data-place-id="${item.place_id}" data-feedback="thumbs_up" onclick="event.stopPropagation(); handleThumbsFeedback('${item.rec_id}', '${item.place_id}', '${item.category || ''}', 'thumbs_up', event)" title="Like this">👍</button>
+            <button class="btn btn-secondary feedback-btn" data-place-id="${item.place_id}" data-feedback="thumbs_down" onclick="event.stopPropagation(); handleThumbsFeedback('${item.rec_id}', '${item.place_id}', '${item.category || ''}', 'thumbs_down', event)" title="Not for me">👎</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'favorite', event)" title="Favorite">⭐</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'already_been', event)" title="Already been here">✅</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); shareRecommendation('${item.rec_id}')" title="Share">📤</button>
@@ -2498,6 +2624,15 @@ function createRecommendationCard(item) {
 async function showDetail(recId) {
     const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
     if (!item) return;
+
+    // Track click for personalization
+    try {
+        fetch(`${API_BASE}/track/click`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ place_id: item.place_id, rec_id: recId, category: item.category })
+        });
+    } catch (e) { /* silent */ }
     
     const modal = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
@@ -3194,6 +3329,118 @@ function closeDetailModal() {
     document.getElementById('detail-modal').classList.remove('active');
 }
 
+async function loadInterestProfile() {
+    const container = document.getElementById('interest-profile-content');
+    if (!container) return;
+    try {
+        const resp = await fetch(`${API_BASE}/profile/interests`);
+        if (!resp.ok) throw new Error('Failed to load');
+        const data = await resp.json();
+        const affinity = data.affinity_scores || {};
+        const signals = data.signals || {};
+
+        const categories = Object.entries(affinity).sort((a, b) => b[1] - a[1]);
+
+        let html = '';
+        if (categories.length === 0) {
+            html = '<p style="color: #999;">No preferences learned yet. Like, save, or visit places to personalize your recommendations!</p>';
+        } else {
+            html += '<div style="margin-bottom: 1rem;">';
+            for (const [cat, score] of categories) {
+                const pct = Math.round((score + 1) / 2 * 100);
+                const color = score > 0 ? '#22c55e' : score < 0 ? '#ef4444' : '#9ca3af';
+                const emoji = { parks: '🌳', museums: '🏛️', food: '🍽️', attractions: '🎡', events: '🎪', shopping: '🛍️', entertainment: '🎭', nature: '🌿', arts: '🎨' }[cat] || '📍';
+                html += `<div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="width: 120px; font-size: 0.9rem;">${emoji} ${cat}</span>
+                    <div style="flex: 1; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;">
+                        <div style="width: ${pct}%; height: 100%; background: ${color}; border-radius: 4px;"></div>
+                    </div>
+                    <span style="width: 50px; text-align: right; font-size: 0.8rem; color: ${color};">${score > 0 ? '+' : ''}${score}</span>
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        html += `<div style="font-size: 0.8rem; color: #999; margin-top: 0.5rem;">
+            Signals: ${signals.thumbs_up || 0} 👍 · ${signals.thumbs_down || 0} 👎 · ${signals.saved || 0} ⭐ · ${signals.visited || 0} ✅ · ${signals.clicks || 0} clicks
+        </div>`;
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<p style="color: #ef4444;">Failed to load interest profile.</p>';
+    }
+}
+
+async function resetInterestProfile(clearAll) {
+    const msg = clearAll
+        ? 'This will clear all your feedback and click data. Continue?'
+        : 'This will reset personalized ranking (keeps your feedback data). Continue?';
+    if (!confirm(msg)) return;
+    try {
+        await fetch(`${API_BASE}/profile/interests/reset`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear_feedback: !!clearAll })
+        });
+        loadInterestProfile();
+    } catch (e) {
+        alert('Failed to reset profile.');
+    }
+}
+
+async function loadFeedbackStatus() {
+    try {
+        const resp = await fetch(`${API_BASE}/feedback/status`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const feedbackMap = data.feedback || {};
+        document.querySelectorAll('.feedback-btn').forEach(btn => {
+            const placeId = btn.dataset.placeId;
+            const feedbackType = btn.dataset.feedback;
+            if (feedbackMap[placeId] === feedbackType) {
+                btn.classList.add('feedback-active');
+                btn.style.background = feedbackType === 'thumbs_up' ? '#d4edda' : '#f8d7da';
+            }
+        });
+    } catch (e) { /* silent */ }
+}
+
+async function handleThumbsFeedback(recId, placeId, category, action, event) {
+    try {
+        const btn = event?.target;
+        const isActive = btn?.classList.contains('feedback-active');
+
+        if (isActive) {
+            // Remove feedback
+            await fetch(`${API_BASE}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rec_id: recId, action: 'remove_feedback', place_id: placeId })
+            });
+            btn.classList.remove('feedback-active');
+            btn.style.background = '';
+        } else {
+            await fetch(`${API_BASE}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rec_id: recId, action, place_id: placeId, category })
+            });
+            // Clear sibling feedback button state
+            if (btn) {
+                const parent = btn.parentElement;
+                parent.querySelectorAll('.feedback-btn').forEach(b => {
+                    b.classList.remove('feedback-active');
+                    b.style.background = '';
+                });
+                btn.classList.add('feedback-active');
+                btn.style.background = action === 'thumbs_up' ? '#d4edda' : '#f8d7da';
+            }
+        }
+    } catch (error) {
+        console.error('Thumbs feedback error:', error);
+    }
+}
+
 async function handleFeedback(recId, action, event) {
     // Find the place_id from current digest
     const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
@@ -3304,6 +3551,10 @@ window.selectEventType = selectEventType;
 window.saveToGoogleCalendar = saveToGoogleCalendar;
 window.closeDetailModal = closeDetailModal;
 window.handleFeedback = handleFeedback;
+window.resetInterestProfile = resetInterestProfile;
+window.handleThumbsFeedback = handleThumbsFeedback;
+window.loadAffinityScores = loadAffinityScores;
+window.resetAffinityScores = resetAffinityScores;
 window.showForgotPassword = showForgotPassword;
 window.closeForgotPasswordModal = closeForgotPasswordModal;
 window.handleForgotPassword = handleForgotPassword;

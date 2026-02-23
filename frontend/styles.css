@@ -2604,3 +2604,133 @@ header {
     color: #9ca3af;
     padding: 0.25rem 0;
 }
+
+
+/* Affinity/Interest Preferences Styles */
+.affinity-list {
+    margin: 1rem 0;
+}
+
+.affinity-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid transparent;
+}
+
+.affinity-item.positive {
+    border-left-color: #28a745;
+}
+
+.affinity-item.negative {
+    border-left-color: #dc3545;
+}
+
+.affinity-item.neutral {
+    border-left-color: #6c757d;
+}
+
+.affinity-category {
+    font-weight: 600;
+    text-transform: capitalize;
+    color: #343a40;
+}
+
+.affinity-score {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.affinity-bar {
+    width: 80px;
+    height: 6px;
+    background: #e9ecef;
+    border-radius: 3px;
+    position: relative;
+    overflow: hidden;
+}
+
+.affinity-bar-fill {
+    height: 100%;
+    transition: width 0.3s ease;
+    border-radius: 3px;
+}
+
+.affinity-bar-fill.positive {
+    background: linear-gradient(90deg, #28a745, #20c997);
+}
+
+.affinity-bar-fill.negative {
+    background: linear-gradient(90deg, #dc3545, #fd7e14);
+}
+
+.affinity-value {
+    font-size: 0.9rem;
+    font-weight: 600;
+    min-width: 40px;
+    text-align: right;
+}
+
+.affinity-level {
+    font-size: 0.8rem;
+    padding: 2px 6px;
+    border-radius: 12px;
+    color: white;
+    font-weight: 500;
+}
+
+.affinity-level.strong {
+    background: #007bff;
+}
+
+.affinity-level.moderate {
+    background: #6f42c1;
+}
+
+.affinity-level.weak {
+    background: #6c757d;
+}
+
+.affinity-stats {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #e3f2fd;
+    border-radius: 8px;
+    border-left: 4px solid #2196f3;
+}
+
+.affinity-stats h4 {
+    margin: 0 0 0.5rem 0;
+    color: #1976d2;
+    font-size: 0.95rem;
+}
+
+.affinity-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+}
+
+.affinity-stat {
+    text-align: center;
+}
+
+.affinity-stat-value {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #1976d2;
+}
+
+.affinity-stat-label {
+    font-size: 0.8rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
