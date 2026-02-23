@@ -1975,10 +1975,11 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
 
     # Fetch all sources in parallel (max wait = slowest source, not sum of all)
     # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
-    # _fetch_parks_rec (dead RSS feeds), _fetch_meetup (404 API change)
+    # _fetch_parks_rec (dead RSS feeds), _fetch_meetup (404 API change),
+    # _fetch_eventbrite_pub (JS-rendered, returns page headers not events)
     tasks = [
         _fetch_luma, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
-        _fetch_yelp, _fetch_ticketmaster, _fetch_osm, _fetch_eventbrite_pub,
+        _fetch_yelp, _fetch_ticketmaster, _fetch_osm,
         _fetch_tripadvisor,
     ]
     # Early return: stop waiting after 5s so we return fast with available results.
