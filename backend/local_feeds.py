@@ -853,15 +853,45 @@ def _fuzzy_title_key(title):
 
 
 def _is_past_event(item):
-    """Return True if the event date is clearly in the past."""
+    """Return True if the event date is clearly in the past (more than 1 day ago)."""
     event_date = item.get("event_date") or item.get("pub_date") or ""
     if not event_date:
         return False
     try:
-        from datetime import datetime
+        from datetime import datetime, timedelta
+        # Try ISO format (handle various formats)
+        date_str = event_date.replace('Z', '+00:00').split('+')[0]
+        # Try full datetime first, then date only
+        try:
+            dt = datetime.fromisoformat(date_str)
+        except ValueError:
+            dt = datetime.fromisoformat(date_str.split('T')[0])
+        # Allow events from today and yesterday (in case of timezone differences)
+        return dt.date() < (datetime.now() - timedelta(days=1)).date()
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _is_stale_news(item):
+    """Return True if an RSS news item is more than 7 days old (not an event)."""
+    if item.get("event_date"):
+        return False  # Has explicit event date, use _is_past_event instead
+    pub_date = item.get("pub_date", "")
+    if not pub_date:
+        return False
+    try:
+        from datetime import datetime, timedelta
+        from email.utils import parsedate_to_datetime
+        # Try RFC 2822 format (common in RSS)
+        try:
+            dt = parsedate_to_datetime(pub_date)
+            return dt.replace(tzinfo=None) < datetime.now() - timedelta(days=7)
+        except (ValueError, TypeError):
+            pass
         # Try ISO format
-        dt = datetime.fromisoformat(event_date.replace('Z', '+00:00').split('+')[0].split('T')[0])
-        return dt.date() < datetime.now().date()
+        date_str = pub_date.replace('Z', '+00:00').split('+')[0]
+        dt = datetime.fromisoformat(date_str.split('T')[0])
+        return dt < datetime.now() - timedelta(days=7)
     except (ValueError, TypeError, AttributeError):
         return False
 
@@ -897,11 +927,12 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
         items = filtered_items
         print(f"[RANK] After {group_type} filter: {len(items)} items remaining")
     
-    # Filter out past events
+    # Filter out past events and stale news
     before_count = len(items)
-    items = [item for item in items if not _is_past_event(item)]
-    if len(items) < before_count:
-        print(f"[RANK] Filtered {before_count - len(items)} past events")
+    items = [item for item in items if not _is_past_event(item) and not _is_stale_news(item)]
+    filtered_count = before_count - len(items)
+    if filtered_count:
+        print(f"[RANK] Filtered {filtered_count} past/stale items")
     
     user_interests = user_interests or []
     interest_categories = {

@@ -1085,6 +1085,8 @@ def filter_places(prefs, user_id, user_lat=None, user_lng=None):
 @require_auth
 def get_digest():
     """Get activity digest for current week using new recommendation engine with fallback chain"""
+    import time as _time
+    _request_start = _time.time()
     user_id = get_user_id()
     prefs = db.get_preferences(user_id) or {}
     
@@ -1115,16 +1117,20 @@ def get_digest():
     try:
         items, sources = get_recommendations(user_id, prefs)
         
+        elapsed_ms = int((_time.time() - _request_start) * 1000)
         response_data = {
             "week": week,
             "generated_at": datetime.now().isoformat(),
             "items": items,
             "sources": sources,  # Show which sources were used
-            "from_cache": 'cache' in sources
+            "from_cache": 'cache' in sources,
+            "response_time_ms": elapsed_ms
         }
         
-        print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)}")
-        return jsonify(response_data)
+        print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)} in {elapsed_ms}ms")
+        resp = jsonify(response_data)
+        resp.headers['X-Response-Time'] = f"{elapsed_ms}ms"
+        return resp
         
     except Exception as e:
         import traceback
@@ -1561,6 +1567,8 @@ def get_feeds_config():
 @app.route('/v1/recommendations/ai', methods=['POST'])
 def get_ai_recommendations():
     """Get AI-powered recommendations with caching and fallback support."""
+    import time as _time
+    _request_start = _time.time()
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
@@ -1605,17 +1613,21 @@ def get_ai_recommendations():
         # Use the same recommendation engine with fallback chain
         items, sources = get_recommendations(user_id, prefs)
         
+        elapsed_ms = int((_time.time() - _request_start) * 1000)
         response_data = {
             "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
             "generated_at": datetime.now().isoformat(),
             "ai_powered": True,
             "sources": sources,
             "items": items,
-            "from_cache": 'cache' in sources
+            "from_cache": 'cache' in sources,
+            "response_time_ms": elapsed_ms
         }
         
-        print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)}")
-        return jsonify(response_data)
+        print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)} in {elapsed_ms}ms")
+        resp = jsonify(response_data)
+        resp.headers['X-Response-Time'] = f"{elapsed_ms}ms"
+        return resp
         
     except Exception as e:
         print(f"[AI] Error in AI recommendations: {e}")
