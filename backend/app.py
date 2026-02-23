@@ -1155,7 +1155,29 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         # Filter by user preferences
         filtered_items = []
         print(f"[RECOMMENDATIONS] Filtering {len(all_items)} items, max_travel={get_max_travel_time(travel_time_ranges)}, max_radius={get_max_radius_miles(travel_time_ranges)}")
+        now = datetime.now()
+        past_filtered = 0
         for item in all_items:
+            # Filter out past events (on or before query date)
+            event_date_str = item.get('event_date')
+            if event_date_str:
+                try:
+                    ed = event_date_str.replace('Z', '+00:00')
+                    # Try ISO format first
+                    try:
+                        event_dt = datetime.fromisoformat(ed)
+                    except (ValueError, AttributeError):
+                        from dateutil import parser as dateutil_parser
+                        event_dt = dateutil_parser.parse(ed)
+                    # Strip timezone for comparison
+                    if event_dt.tzinfo:
+                        event_dt = event_dt.replace(tzinfo=None)
+                    if event_dt < now:
+                        past_filtered += 1
+                        continue
+                except Exception:
+                    pass  # Can't parse date, keep the item
+
             # Apply travel time filter
             travel_time = item.get('travel_time_min')
             if travel_time and isinstance(travel_time, (int, float)):
@@ -1177,6 +1199,8 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
             
             filtered_items.append(item)
         
+        if past_filtered:
+            print(f"[RECOMMENDATIONS] Filtered out {past_filtered} past events")
         print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
         
         # Get user affinity scores for personalized re-ranking
