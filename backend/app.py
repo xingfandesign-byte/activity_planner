@@ -3254,14 +3254,14 @@ def _warm_cache_on_startup():
         time.sleep(2)  # Let the server start first
         try:
             users_with_prefs = db.get_all_users_with_preferences()
-            if not users_with_prefs:
-                # Warm cache for demo user with default prefs
-                users_with_prefs = [{'id': 'demo_user', 'preferences': {
-                    'home_location': {'value': 'San Francisco, CA'},
-                    'categories': ['parks', 'museums', 'attractions'],
-                    'kid_friendly': True,
-                    'travel_time_ranges': ['15-30'],
-                }}]
+            # Always include demo user with default prefs for guests
+            demo_prefs = {
+                'home_location': {'type': 'city', 'value': 'San Francisco, CA'},
+                'categories': ['parks', 'museums', 'attractions'],
+                'kid_friendly': True,
+                'travel_time_ranges': ['15-30'],
+            }
+            users_with_prefs.append({'id': 'demo_user', 'preferences': demo_prefs})
             
             for user in users_with_prefs[:3]:  # Warm top 3 users max
                 user_id = user.get('id', 'demo_user')
