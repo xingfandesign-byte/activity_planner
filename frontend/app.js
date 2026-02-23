@@ -2282,6 +2282,30 @@ function createRecommendationCard(item) {
         }
     }
     
+    // Build location/distance badge
+    let locationBadge;
+    if (isDistanceNA) {
+        // Show address snippet instead of n/a
+        const addr = (item.address || '').trim();
+        locationBadge = addr ? `<span class="info-badge">📍 ${addr.length > 30 ? addr.substring(0, 30) + '…' : addr}</span>` : '';
+    } else {
+        locationBadge = `<span class="info-badge">📍 ${distanceDisplay}</span>
+            <span class="info-badge ${trafficClass}">⏱️ ${travelTimeDisplay}</span>`;
+    }
+    
+    // Source badge
+    const feedSource = item.feed_source || item.source || '';
+    const sourceBadge = feedSource ? `<span class="info-badge" style="color:#9ca3af;font-size:0.8rem;">${feedSource}</span>` : '';
+    
+    // Clean explanation - truncate for card view
+    let explanation = (item.explanation || item.description || '').replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ').replace(/^[^a-zA-Z0-9]+/, '').replace(/\s+/g, ' ').trim();
+    if (explanation.length > 150) explanation = explanation.substring(0, 147) + '…';
+    
+    // Price badge
+    const priceBadge = item.price_flag && item.price_flag.toLowerCase() === 'free' 
+        ? '<span class="info-badge" style="color:#059669;font-weight:600;">Free</span>' 
+        : (item.price_flag && item.price_flag !== '$' ? `<span class="info-badge">${item.price_flag}</span>` : '');
+    
     card.innerHTML = `
         <div class="card-header">
             <div>
@@ -2290,11 +2314,12 @@ function createRecommendationCard(item) {
         </div>
         ${eventDateDisplay ? `<div class="card-event-date">📅 ${eventDateDisplay}</div>` : ''}
         <div class="card-info">
-            <span class="info-badge">📍 ${distanceDisplay}</span>
-            <span class="info-badge ${trafficClass}">⏱️ ${travelTimeDisplay} ${!isDistanceNA ? `(${trafficLabel})` : ''}</span>
+            ${locationBadge}
             ${item.kid_friendly ? '<span class="info-badge">👶 Kid-friendly</span>' : ''}
+            ${priceBadge}
+            ${sourceBadge}
         </div>
-        <div class="card-explanation">${(item.explanation || '').replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ').replace(/^[^a-zA-Z0-9]+/, '').replace(/\s+/g, ' ').trim()}</div>
+        ${explanation ? `<div class="card-explanation">${explanation}</div>` : ''}
         <div class="card-actions">
             <button class="btn btn-primary" onclick="event.stopPropagation(); showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
             ${item.event_link ? `<a href="${item.event_link}" target="_blank" rel="noopener" class="btn btn-secondary" onclick="event.stopPropagation();" title="Event Link">🔗</a>` : ''}

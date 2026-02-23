@@ -634,7 +634,7 @@ def get_recommendations(user_id, prefs):
                 user_lat=user_lat,
                 user_lng=user_lng,
                 geocode_fn=geocode_to_lat_lng,
-                max_items=10,
+                max_items=20,
                 max_travel_min=max_travel_min,
                 max_radius_miles=max_radius_miles,
                 week_str=week_str
@@ -689,28 +689,56 @@ def get_recommendations(user_id, prefs):
         
         print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
         
-        # Rank by mix of places vs events (aim for ~60% places, ~40% events)
-        places = [item for item in filtered_items if item.get('type') == 'place']
-        events = [item for item in filtered_items if item.get('type') == 'event']
+        # Score and rank all items together
+        def _item_score(item):
+            score = 0
+            # Strong bonus for items with distance data
+            if item.get('distance_miles') is not None:
+                score += 30
+                # Closer items score higher
+                d = item.get('distance_miles', 50)
+                if d <= 5:
+                    score += 15
+                elif d <= 10:
+                    score += 10
+                elif d <= 20:
+                    score += 5
+            # Rating bonus
+            score += (item.get('rating', 0) or 0) * 5
+            # Events with dates are more actionable
+            if item.get('event_date'):
+                score += 5
+            # Kid-friendly bonus if applicable
+            if kid_friendly and item.get('kid_friendly'):
+                score += 10
+            # Free is a plus
+            if (item.get('price_flag') or '').lower() == 'free':
+                score += 3
+            return score
         
-        # Take top items with desired mix
+        filtered_items.sort(key=_item_score, reverse=True)
+        
+        # Take top 15 items with source diversity
         final_items = []
-        places_target = min(5, len(places))  # Up to 5 places
-        events_target = min(3, len(events))  # Up to 3 events
+        source_counts = {}
+        max_per_source = 6
         
-        # Sort by rating/relevance
-        places.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
-        events.sort(key=lambda x: -(x.get('distance_miles') or 100))  # Events by proximity
+        for item in filtered_items:
+            src = item.get('feed_source') or item.get('type', 'unknown')
+            if source_counts.get(src, 0) >= max_per_source:
+                continue
+            source_counts[src] = source_counts.get(src, 0) + 1
+            final_items.append(item)
+            if len(final_items) >= 15:
+                break
         
-        final_items.extend(places[:places_target])
-        final_items.extend(events[:events_target])
-        
-        # If we need more items, fill from remaining
-        remaining_needed = 8 - len(final_items)
-        if remaining_needed > 0:
-            remaining = [item for item in filtered_items if item not in final_items]
-            remaining.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
-            final_items.extend(remaining[:remaining_needed])
+        # Fill remaining if needed
+        if len(final_items) < 15:
+            for item in filtered_items:
+                if item not in final_items:
+                    final_items.append(item)
+                    if len(final_items) >= 15:
+                        break
         
         # Cache successful results
         if final_items:
@@ -1192,8 +1220,10 @@ def geocode_to_lat_lng(query):
             "san francisco": (37.7749, -122.4194),
             "san francisco, california": (37.7749, -122.4194),
             "san francisco, ca": (37.7749, -122.4194),
-            "oakland": (37.8044, -121.9712),
-            "oakland, ca": (37.8044, -121.9712),
+            "sf": (37.7749, -122.4194),
+            "sf, ca": (37.7749, -122.4194),
+            "oakland": (37.8044, -122.2712),
+            "oakland, ca": (37.8044, -122.2712),
             "berkeley": (37.8716, -122.2727),
             "berkeley, ca": (37.8716, -122.2727),
             "fremont": (37.5485, -121.9886),
@@ -1212,6 +1242,45 @@ def geocode_to_lat_lng(query):
             "hayward, ca": (37.6688, -122.0808),
             "union city": (37.5934, -122.0438),
             "union city, ca": (37.5934, -122.0438),
+            "castro valley": (37.6941, -122.0864),
+            "castro valley, ca": (37.6941, -122.0864),
+            "pleasanton": (37.6624, -121.8747),
+            "pleasanton, ca": (37.6624, -121.8747),
+            "livermore": (37.6819, -121.7680),
+            "livermore, ca": (37.6819, -121.7680),
+            "dublin": (37.7022, -121.9358),
+            "dublin, ca": (37.7022, -121.9358),
+            "san mateo": (37.5630, -122.3255),
+            "san mateo, ca": (37.5630, -122.3255),
+            "redwood city": (37.4852, -122.2364),
+            "redwood city, ca": (37.4852, -122.2364),
+            "santa clara": (37.3541, -121.9552),
+            "santa clara, ca": (37.3541, -121.9552),
+            "cupertino": (37.3230, -122.0322),
+            "cupertino, ca": (37.3230, -122.0322),
+            "milpitas": (37.4323, -121.8996),
+            "milpitas, ca": (37.4323, -121.8996),
+            "san leandro": (37.7249, -122.1561),
+            "san leandro, ca": (37.7249, -122.1561),
+            "walnut creek": (37.9101, -122.0652),
+            "walnut creek, ca": (37.9101, -122.0652),
+            "concord": (37.9780, -122.0311),
+            "concord, ca": (37.9780, -122.0311),
+            "richmond": (37.9358, -122.3478),
+            "richmond, ca": (37.9358, -122.3478),
+            "daly city": (37.6879, -122.4702),
+            "daly city, ca": (37.6879, -122.4702),
+            "south san francisco": (37.6547, -122.4077),
+            "south san francisco, ca": (37.6547, -122.4077),
+            "alameda": (37.7652, -122.2416),
+            "alameda, ca": (37.7652, -122.2416),
+            "kensington": (37.9107, -122.2802),
+            "kensington, ca": (37.9107, -122.2802),
+            "emeryville": (37.8313, -122.2852),
+            "emeryville, ca": (37.8313, -122.2852),
+            "east bay": (37.7749, -122.2000),
+            "east bay, ca": (37.7749, -122.2000),
+            "bay area": (37.6000, -122.1000),
         }
         known_key = cache_key.replace(", usa", "").replace(",usa", "").strip()
         if known_key in _KNOWN_LOCATIONS:

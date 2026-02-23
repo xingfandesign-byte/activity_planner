@@ -673,14 +673,23 @@ def fetch_510families_events(limit=15):
         
         # Clean up items - titles have <li> tags, descriptions have HTML
         for item in items:
-            # Clean title - remove <li> tags
+            # Clean title - remove <li> tags and decode HTML entities
             title = item.get("title", "")
             title = re.sub(r'</?li>', '', title).strip()
+            try:
+                import html as _html
+                title = _html.unescape(title)
+            except Exception:
+                pass
             item["title"] = title or "510families Event"
             
             # Extract location from description (format: "Date<br>Venue<br>Address<br>City")
             desc = item.get("description", "")
             desc_clean = re.sub(r'</?li>', '', desc)
+            try:
+                desc_clean = _html.unescape(desc_clean)
+            except Exception:
+                pass
             parts = re.split(r'<br\s*/?>', desc_clean)
             if len(parts) >= 4:
                 item["location_str"] = f"{parts[1].strip()}, {parts[3].strip()}"
@@ -786,14 +795,39 @@ def is_inappropriate_for_group(item, group_type):
     return False
 
 
+def _fuzzy_title_key(title):
+    """Generate a fuzzy key for deduplication — strips noise words, punctuation, whitespace."""
+    t = (title or "").lower()
+    t = re.sub(r'[^a-z0-9\s]', '', t)
+    # Remove common noise words
+    noise = {'the', 'a', 'an', 'at', 'in', 'on', 'for', 'of', 'and', 'to', 'with', 'free', 'new'}
+    words = [w for w in t.split() if w not in noise and len(w) > 1]
+    return ' '.join(sorted(words))
+
+
+def _is_past_event(item):
+    """Return True if the event date is clearly in the past."""
+    event_date = item.get("event_date") or item.get("pub_date") or ""
+    if not event_date:
+        return False
+    try:
+        from datetime import datetime
+        # Try ISO format
+        dt = datetime.fromisoformat(event_date.replace('Z', '+00:00').split('+')[0].split('T')[0])
+        return dt.date() < datetime.now().date()
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, group_type=None):
     """
     Rank and deduplicate recommendations from multiple sources.
     Scoring factors:
+    - Has distance/location data (strong bonus — items without are less useful)
     - Relevance to user interests (category match)
     - Distance (closer is better)
     - Source diversity (balance different sources)
-    - Recency (upcoming events preferred)
+    - Freshness (upcoming events preferred, past events filtered)
     - Group-appropriateness (filter content based on group type)
     """
     if not items:
@@ -810,16 +844,27 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
         items = filtered_items
         print(f"[RANK] After {group_type} filter: {len(items)} items remaining")
     
+    # Filter out past events
+    before_count = len(items)
+    items = [item for item in items if not _is_past_event(item)]
+    if len(items) < before_count:
+        print(f"[RANK] Filtered {before_count - len(items)} past events")
+    
     user_interests = user_interests or []
     interest_categories = {
         "arts_culture": ["arts", "culture", "art", "museum", "gallery", "theater", "music"],
         "nature": ["nature", "park", "outdoor", "hiking", "garden", "trail"],
         "food_drink": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine"],
+        "food_drinks": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine"],
         "fitness": ["fitness", "sports", "yoga", "gym", "run", "bike"],
-        "learning": ["learning", "workshop", "class", "lecture", "education"],
-        "shopping": ["shopping", "market", "boutique", "store"],
+        "adventure": ["adventure", "sports", "active", "climb", "kayak", "hike"],
+        "learning": ["learning", "workshop", "class", "lecture", "education", "science", "library"],
+        "shopping": ["shopping", "market", "boutique", "store", "flea"],
         "nightlife": ["nightlife", "club", "bar", "concert", "live music"],
-        "family": ["family", "kids", "children", "family-friendly"],
+        "family": ["family", "kids", "children", "family-friendly", "playground"],
+        "events": ["event", "festival", "fair", "celebration", "community"],
+        "entertainment": ["entertainment", "show", "theater", "music", "concert", "comedy"],
+        "relaxation": ["relaxation", "spa", "meditation", "yoga", "wellness", "garden"],
     }
     
     # Build set of relevant keywords from user interests
@@ -829,48 +874,72 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
     
     # Score each item
     scored_items = []
-    seen_titles = set()
+    seen_fuzzy_titles = set()
     source_counts = {}
     
     for item in items:
         title_lower = (item.get("title", "") or "").lower()
         
-        # Skip duplicates (same title)
-        title_key = re.sub(r'[^a-z0-9]', '', title_lower)
-        if title_key in seen_titles:
+        # Fuzzy dedup — skip items with very similar titles
+        fuzzy_key = _fuzzy_title_key(title_lower)
+        if fuzzy_key in seen_fuzzy_titles:
             continue
-        seen_titles.add(title_key)
+        seen_fuzzy_titles.add(fuzzy_key)
         
         score = 50  # Base score
         
-        # Interest relevance (+20 for match)
+        # Strong bonus for items with actual distance data (+30)
+        has_distance = item.get("distance_miles") is not None and isinstance(item.get("distance_miles"), (int, float))
+        if has_distance:
+            score += 30
+        else:
+            score -= 20  # Penalize items with no location data
+        
+        # Interest relevance (+20 for match, +10 for partial)
         category = (item.get("category", "") or "").lower()
         description = (item.get("description", "") or "").lower()
         title_and_desc = f"{title_lower} {description} {category}"
         
+        match_count = 0
         for keyword in relevant_keywords:
             if keyword in title_and_desc:
-                score += 20
-                break
-        
-        # Distance penalty (-1 per mile, max -20)
-        distance = item.get("distance_miles", 10)
-        if isinstance(distance, (int, float)):
-            score -= min(distance, 20)
-        
-        # Source diversity bonus (max 3 per source before penalty)
-        source = item.get("source", "Unknown")
-        source_counts[source] = source_counts.get(source, 0) + 1
-        if source_counts[source] > 3:
-            score -= 10 * (source_counts[source] - 3)
-        
-        # Kid-friendly bonus if family is an interest
-        if "family" in user_interests and item.get("kid_friendly"):
+                match_count += 1
+        if match_count >= 2:
+            score += 25
+        elif match_count == 1:
             score += 15
+        
+        # Distance bonus (closer is better, max +20 for very close)
+        if has_distance:
+            distance = item.get("distance_miles", 10)
+            if distance <= 5:
+                score += 15
+            elif distance <= 10:
+                score += 10
+            elif distance <= 20:
+                score += 5
+            else:
+                score -= min(distance - 20, 15)
+        
+        # Source diversity bonus (max 4 per source before penalty)
+        source = item.get("feed_source") or item.get("source", "Unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if source_counts[source] > 4:
+            score -= 8 * (source_counts[source] - 4)
+        
+        # Kid-friendly bonus if family group
+        if group_type == "family" and item.get("kid_friendly"):
+            score += 15
+        elif "family" in user_interests and item.get("kid_friendly"):
+            score += 10
         
         # Free events get a small bonus
         price = (item.get("price_flag", "") or "").lower()
         if price == "free":
+            score += 5
+        
+        # Bonus for items with event dates (timely content is more actionable)
+        if item.get("event_date"):
             score += 5
         
         scored_items.append((score, item))
@@ -883,8 +952,7 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
     final_source_counts = {}
     
     # Calculate max items per source based on total requested
-    # For 15 items, allow up to 5 per source initially
-    max_per_source_initial = max(3, max_items // 3)
+    max_per_source_initial = max(4, max_items // 3)
     
     # First pass: add top items from each source (with diversity limit)
     for score, item in scored_items:
@@ -977,6 +1045,13 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
     link = item.get("link", "")
     source = item.get("source", "Local feed")
     location_str = item.get("location_str") or item.get("address") or ""
+    # Decode HTML entities in location strings (e.g. &#124; -> |, &#039; -> ', &amp; -> &)
+    try:
+        import html as _html
+        location_str = _html.unescape(location_str)
+        title = _html.unescape(title)
+    except Exception:
+        pass
     lat, lng = None, None
     geocoded = False
     distance_is_estimated = False
@@ -1031,8 +1106,15 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         # Try geocoding - add state context if not already present
         search_location = location_str
         
-        # Check if location already has a state abbreviation (e.g., ", CA" or ", NY")
+        # Clean venue names with pipe separators: "Main | Oakland Public Library" -> "Oakland Public Library"
         import re
+        if '|' in search_location:
+            # Take the longer part (usually the actual venue name)
+            parts = [p.strip() for p in search_location.split('|')]
+            search_location = max(parts, key=len)
+            print(f"[NORMALIZE] Cleaned pipe separator: '{search_location}'")
+        
+        # Check if location already has a state abbreviation (e.g., ", CA" or ", NY")
         has_state = bool(re.search(r',\s*[A-Z]{2}\s*(\d{5})?$', location_str.upper()))
         
         if user_state and not has_state:
