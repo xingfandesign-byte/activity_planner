@@ -644,24 +644,8 @@ async function loadDashboardRecommendations() {
                 const data = JSON.parse(lastResults);
                 if (data.items && data.items.length > 0) {
                     if (container) {
-                        container.innerHTML = '';
-                        // Show network error indicator with cached results
-                        const errorIndicator = document.createElement('div');
-                        errorIndicator.style.gridColumn = '1 / -1';
-                        errorIndicator.innerHTML = `
-                            <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #dc2626;">
-                                <span>⚠️</span>
-                                <span>Network error - showing last successful results</span>
-                                <button onclick="refreshRecommendations()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
-                            </div>
-                        `;
-                        container.appendChild(errorIndicator);
-                        
-                        // Show the cached items
-                        data.items.forEach(item => {
-                            const card = createRecommendationCard(item);
-                            container.appendChild(card);
-                        });
+                        // Silently show cached results — no error banner needed
+                        renderDashboardItems(data.items, true, data.sources || []);
                     }
                     return;
                 }
