@@ -1591,23 +1591,23 @@ def get_ai_recommendations():
         'kid_friendly': profile.get('kid_friendly', False)
     }
     
-    # Map interests to categories for filtering
+    # Map interests to categories for filtering (broader mapping for better recall)
     interest_to_category = {
-        'nature': ['parks'],
-        'arts_culture': ['museums'],
-        'food_drinks': ['food'],
-        'adventure': ['attractions'],
-        'learning': ['museums'],
-        'entertainment': ['attractions'],
-        'relaxation': ['parks'],
-        'shopping': ['attractions'],
-        'events': ['events']
+        'nature': ['parks', 'nature'],
+        'arts_culture': ['museums', 'arts_culture', 'arts'],
+        'food_drinks': ['food', 'food_drink', 'food_drinks'],
+        'adventure': ['attractions', 'adventure', 'fitness'],
+        'learning': ['museums', 'learning'],
+        'entertainment': ['attractions', 'entertainment'],
+        'relaxation': ['parks', 'relaxation'],
+        'shopping': ['shopping'],
+        'events': ['events', 'family']
     }
     
     categories = []
     for interest in prefs.get('interests', []):
         categories.extend(interest_to_category.get(interest, []))
-    prefs['categories'] = list(set(categories)) or ['parks', 'museums', 'attractions']
+    prefs['categories'] = list(set(categories)) or ['parks', 'museums', 'attractions', 'events']
     
     try:
         # Use the same recommendation engine with fallback chain
