@@ -2568,7 +2568,7 @@ function createRecommendationCard(item) {
         : (item.price_flag && item.price_flag !== '$' ? `<span class="info-badge">${item.price_flag}</span>` : '');
     
     // Card image
-    const cardImageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title);
+    const cardImageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title, item.kid_friendly);
     const categoryEmojis = {
         'parks': '🌲', 'museums': '🏛️', 'food': '🍽️', 'attractions': '🎢',
         'entertainment': '🎭', 'shopping': '🛍️', 'events': '🎪', 'nature': '🌿',
@@ -2579,7 +2579,7 @@ function createRecommendationCard(item) {
     card.innerHTML = `
         <div class="card-image-container">
             <div class="card-image-placeholder">${placeholderEmoji}</div>
-            <img class="card-image" data-src="${cardImageUrl}" alt="" loading="lazy"
+            <img class="card-image" src="${cardImageUrl}" alt="" loading="lazy"
                  onload="this.classList.add('loaded')"
                  onerror="this.remove()">
         </div>
@@ -2916,9 +2916,20 @@ function buildImageSearchQuery(item, address, cityState) {
     return [title, combined, location].filter(Boolean).join(' ').trim() || title;
 }
 
-function getPlaceImageUrl(category, title) {
+function getPlaceImageUrl(category, title, kidFriendly) {
     // Curated Unsplash images by category
     const categoryImages = {
+        'family': [
+            'https://images.unsplash.com/photo-1536640712-4d4c36ff0e4e?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1484820540004-14229fe36ca4?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1596464716127-f2a82984de30?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1587654780291-39c9404d7dd0?w=800&h=400&fit=crop'
+        ],
+        'events': [
+            'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1505236858219-8359eb29e329?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&h=400&fit=crop'
+        ],
         'parks': [
             'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop',
             'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=400&fit=crop',
