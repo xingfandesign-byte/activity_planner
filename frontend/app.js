@@ -242,6 +242,49 @@ function stopLoadingAnimation() {
     }
 }
 
+// ==================== NETWORK STATUS ====================
+
+let isOffline = !navigator.onLine;
+let retryCount = 0;
+const MAX_RETRIES = 3;
+
+window.addEventListener('online', () => {
+    isOffline = false;
+    retryCount = 0;
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.classList.add('hidden');
+    // Auto-refresh if we were showing an error
+    const container = document.getElementById('dashboard-digest-items');
+    if (container && container.querySelector('.empty-state, [style*="color: #ef4444"]')) {
+        loadDashboardRecommendations();
+    }
+});
+
+window.addEventListener('offline', () => {
+    isOffline = true;
+    showOfflineBanner();
+});
+
+function showOfflineBanner() {
+    let banner = document.getElementById('offline-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'offline-banner';
+        banner.setAttribute('role', 'alert');
+        banner.innerHTML = `
+            <span>📡 You're offline — showing cached results</span>
+            <button onclick="this.parentElement.classList.add('hidden')" aria-label="Dismiss">✕</button>
+        `;
+        document.body.prepend(banner);
+    }
+    banner.classList.remove('hidden');
+}
+
+function getRetryDelay() {
+    // Exponential backoff: 1s, 2s, 4s
+    return Math.min(1000 * Math.pow(2, retryCount), 4000);
+}
+
 // ==================== INITIALIZATION ====================
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -402,6 +445,29 @@ function setupEventListeners() {
         });
     });
     
+    // Enter key support for forms
+    document.getElementById('login-password')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleLogin();
+    });
+    document.getElementById('login-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('login-password')?.focus();
+    });
+    document.getElementById('signup-password')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleSignup();
+    });
+    document.getElementById('signup-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') document.getElementById('signup-password')?.focus();
+    });
+    document.getElementById('zip-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitLocation('zip');
+    });
+    document.getElementById('address-input')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submitLocation('address');
+    });
+    document.getElementById('forgot-email')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleForgotPassword();
+    });
+    
     // Modal close buttons
     document.querySelectorAll('.modal .close').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -414,6 +480,17 @@ function setupEventListeners() {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) modal.classList.remove('active');
         });
+    });
+
+    // Close modals on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const activeModal = document.querySelector('.modal.active');
+            if (activeModal) {
+                activeModal.classList.remove('active');
+                e.preventDefault();
+            }
+        }
     });
 }
 
@@ -476,8 +553,27 @@ async function loadDashboardRecommendations() {
     
     if (loading) loading.style.display = 'block';
     
-    // Start personalized loading animation
-    startLoadingAnimation(container);
+    // Show skeleton cards for perceived performance
+    if (container) {
+        container.innerHTML = `
+            <div class="skeleton-cards">
+                ${Array(4).fill('').map(() => `
+                    <div class="recommendation-card skeleton-card">
+                        <div class="skeleton-line skeleton-title"></div>
+                        <div class="skeleton-line skeleton-short"></div>
+                        <div class="skeleton-line skeleton-medium"></div>
+                        <div class="skeleton-line skeleton-short"></div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    // Start personalized loading animation (overlay)
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.id = 'loading-overlay';
+    startLoadingAnimation(loadingOverlay);
+    if (container) container.prepend(loadingOverlay);
     
     try {
         // Build user profile and prompt
@@ -534,14 +630,7 @@ async function loadDashboardRecommendations() {
             renderDashboardItems(data.items, data.from_cache, data.sources);
         } else {
             if (container) {
-                container.innerHTML = `
-                    <div style="text-align: center; padding: 2rem; color: #666;">
-                        <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
-                        <p><strong>No recommendations found</strong></p>
-                        <p style="margin: 0.5rem 0; font-size: 0.9rem;">Try adjusting your preferences above or check back later</p>
-                        <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Try Again</button>
-                    </div>
-                `;
+                container.innerHTML = buildEmptyState();
             }
         }
     } catch (error) {
@@ -555,23 +644,8 @@ async function loadDashboardRecommendations() {
                 const data = JSON.parse(lastResults);
                 if (data.items && data.items.length > 0) {
                     if (container) {
-                        container.innerHTML = '';
-                        // Show network error indicator with cached results
-                        const errorIndicator = document.createElement('div');
-                        errorIndicator.innerHTML = `
-                            <div style="background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #dc2626;">
-                                <span>⚠️</span>
-                                <span>Network error - showing last successful results</span>
-                                <button onclick="refreshRecommendations()" style="margin-left: auto; padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #dc2626; color: white; border: none; border-radius: 4px; cursor: pointer;">Retry</button>
-                            </div>
-                        `;
-                        container.appendChild(errorIndicator);
-                        
-                        // Show the cached items
-                        data.items.forEach(item => {
-                            const card = createRecommendationCard(item);
-                            container.appendChild(card);
-                        });
+                        // Silently show cached results — no error banner needed
+                        renderDashboardItems(data.items, true, data.sources || []);
                     }
                     return;
                 }
@@ -581,16 +655,47 @@ async function loadDashboardRecommendations() {
         }
         
         if (container) {
+            const offline = !navigator.onLine;
             container.innerHTML = `
-                <div style="text-align: center; padding: 2rem; color: #ef4444;">
-                    <div style="font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
-                    <p><strong>Error loading recommendations</strong></p>
-                    <p style="font-size: 0.85rem; margin-top: 0.5rem; color: #666;">Make sure the backend server is running</p>
-                    <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1rem;">Retry</button>
+                <div class="empty-state" role="alert">
+                    <div class="empty-state-icon">${offline ? '📡' : '⚠️'}</div>
+                    <h3 class="empty-state-title">${offline ? "You're offline" : 'Error loading recommendations'}</h3>
+                    <p class="empty-state-subtitle">${offline
+                        ? 'Check your internet connection and try again.'
+                        : 'Make sure the backend server is running, or try again in a moment.'}</p>
+                    <button class="btn btn-primary" onclick="retryWithBackoff()" style="width: auto; margin-top: 1rem;" id="retry-btn">
+                        Retry
+                    </button>
                 </div>
             `;
         }
     }
+}
+
+// Lazy load images using IntersectionObserver
+const _imgObserver = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const img = entry.target;
+            if (img.dataset.src) {
+                img.src = img.dataset.src;
+                delete img.dataset.src;
+            }
+            _imgObserver.unobserve(img);
+        }
+    });
+}, { rootMargin: '200px' }) : null;
+
+function observeLazyImages(container) {
+    if (!container) return;
+    container.querySelectorAll('img[data-src]').forEach(img => {
+        if (_imgObserver) {
+            _imgObserver.observe(img);
+        } else {
+            img.src = img.dataset.src;
+            delete img.dataset.src;
+        }
+    });
 }
 
 function renderDashboardItems(items, fromCache = false, sources = []) {
@@ -599,10 +704,21 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     
     container.innerHTML = '';
     
+    // Show response time if available (outside grid flow)
+    const responseTime = window.currentDigest?.response_time_ms;
+    if (responseTime !== undefined) {
+        const timeIndicator = document.createElement('div');
+        timeIndicator.className = 'response-time-indicator';
+        timeIndicator.style.gridColumn = '1 / -1';
+        timeIndicator.textContent = `Loaded in ${responseTime < 1000 ? responseTime + 'ms' : (responseTime / 1000).toFixed(1) + 's'}`;
+        container.appendChild(timeIndicator);
+    }
+    
     // Add cache/source indicator if needed
     if (fromCache || sources.includes('cache')) {
         const cacheIndicator = document.createElement('div');
         cacheIndicator.className = 'cache-indicator';
+        cacheIndicator.style.gridColumn = '1 / -1';
         cacheIndicator.innerHTML = `
             <div style="background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #6b7280;">
                 <span>💾</span>
@@ -614,6 +730,7 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
     } else if (sources.includes('mock')) {
         const mockIndicator = document.createElement('div');
         mockIndicator.className = 'mock-indicator';
+        mockIndicator.style.gridColumn = '1 / -1';
         mockIndicator.innerHTML = `
             <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 0.75rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #92400e;">
                 <span>ℹ️</span>
@@ -629,6 +746,9 @@ function renderDashboardItems(items, fromCache = false, sources = []) {
         const card = createRecommendationCard(item);
         container.appendChild(card);
     });
+    
+    // Start lazy loading images
+    observeLazyImages(container);
 }
 
 // ==================== AUTH FORMS ====================
@@ -1672,6 +1792,10 @@ function showSettingsTab(tab) {
         loadSavedPlaces();
     } else if (tab === 'been') {
         loadBeenPlaces();
+    } else if (tab === 'interests') {
+        loadAffinityScores();
+    } else if (tab === 'interests') {
+        loadInterestProfile();
     }
 }
 
@@ -1704,6 +1828,124 @@ function saveNotificationSettings() {
     };
     localStorage.setItem('notification_settings', JSON.stringify(settings));
     alert('Notification preferences saved!');
+}
+
+async function loadAffinityScores() {
+    const loadingEl = document.getElementById('affinity-loading');
+    const contentEl = document.getElementById('affinity-content');
+    const listEl = document.getElementById('affinity-list');
+    const statsEl = document.getElementById('affinity-stats');
+    const authToken = localStorage.getItem('auth_token');
+    
+    if (!authToken) {
+        listEl.innerHTML = '<div class="list-auth-needed">Sign in to see your learned preferences</div>';
+        statsEl.innerHTML = '';
+        return;
+    }
+    
+    loadingEl.style.display = 'block';
+    contentEl.style.display = 'none';
+    
+    try {
+        const response = await fetch(`${API_BASE}/user/affinity`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            displayAffinityScores(data);
+        } else {
+            listEl.innerHTML = '<div class="list-error">Failed to load preferences</div>';
+            statsEl.innerHTML = '';
+        }
+    } catch (error) {
+        console.error('Error loading affinity scores:', error);
+        listEl.innerHTML = '<div class="list-error">Failed to load preferences</div>';
+        statsEl.innerHTML = '';
+    } finally {
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'block';
+    }
+}
+
+function displayAffinityScores(data) {
+    const listEl = document.getElementById('affinity-list');
+    const statsEl = document.getElementById('affinity-stats');
+    const { preferences = [], stats = {} } = data;
+    
+    if (preferences.length === 0) {
+        listEl.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">🎯</div>
+                <p>No learned preferences yet</p>
+                <p class="empty-hint">Use thumbs up/down, save places, and mark places as visited to build your preference profile</p>
+            </div>
+        `;
+        statsEl.innerHTML = '';
+        return;
+    }
+    
+    // Display preference items
+    listEl.innerHTML = preferences.map(pref => {
+        const barWidth = Math.abs(pref.score) * 100; // score is [-1, 1]
+        return `
+            <div class="affinity-item ${pref.sentiment}">
+                <div class="affinity-category">${pref.category}</div>
+                <div class="affinity-score">
+                    <div class="affinity-bar">
+                        <div class="affinity-bar-fill ${pref.sentiment}" style="width: ${barWidth}%"></div>
+                    </div>
+                    <div class="affinity-value">${pref.score > 0 ? '+' : ''}${pref.score}</div>
+                    <div class="affinity-level ${pref.level}">${pref.level}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Display stats
+    statsEl.innerHTML = `
+        <h4>📊 Your Activity Summary</h4>
+        <div class="affinity-stats-grid">
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.saved_places || 0}</span>
+                <span class="affinity-stat-label">Saved</span>
+            </div>
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.visited_places || 0}</span>
+                <span class="affinity-stat-label">Visited</span>
+            </div>
+            <div class="affinity-stat">
+                <span class="affinity-stat-value">${stats.interactions || 0}</span>
+                <span class="affinity-stat-label">Total</span>
+            </div>
+        </div>
+    `;
+}
+
+async function resetAffinityScores() {
+    if (!confirm('Are you sure you want to reset your learned preferences? This will clear your personalization data.')) {
+        return;
+    }
+    
+    const authToken = localStorage.getItem('auth_token');
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/user/affinity/reset`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+            alert('Your learned preferences have been reset successfully.');
+            loadAffinityScores(); // Reload the display
+        } else {
+            alert('Failed to reset preferences. Please try again.');
+        }
+    } catch (error) {
+        console.error('Error resetting affinity scores:', error);
+        alert('Failed to reset preferences. Please try again.');
+    }
 }
 
 async function loadSavedPlaces() {
@@ -2166,6 +2408,8 @@ async function loadDigest() {
         
         if (data.items && data.items.length > 0) {
             renderDigestItems(data.items, data.from_cache, data.sources);
+            // Restore thumbs feedback button states
+            loadFeedbackStatus();
         } else {
             if (itemsContainer) {
                 itemsContainer.innerHTML = `
@@ -2228,12 +2472,17 @@ function renderDigestItems(items, fromCache = false, sources = []) {
         const card = createRecommendationCard(item);
         container.appendChild(card);
     });
+    
+    observeLazyImages(container);
 }
 
 function createRecommendationCard(item) {
     const card = document.createElement('div');
     card.className = 'recommendation-card';
     card.style.cursor = 'pointer';
+    card.setAttribute('role', 'article');
+    card.setAttribute('aria-label', item.title);
+    card.setAttribute('tabindex', '0');
     
     // Handle n/a and estimated distances
     const isDistanceNA = item.distance_is_na || item.distance_miles === null;
@@ -2282,7 +2531,45 @@ function createRecommendationCard(item) {
         }
     }
     
+    // Build location/distance badge
+    let locationBadge;
+    if (isDistanceNA) {
+        // Show address snippet instead of n/a
+        const addr = (item.address || '').trim();
+        locationBadge = addr ? `<span class="info-badge">📍 ${addr.length > 30 ? addr.substring(0, 30) + '…' : addr}</span>` : '';
+    } else {
+        locationBadge = `<span class="info-badge">📍 ${distanceDisplay}</span>
+            <span class="info-badge ${trafficClass}">⏱️ ${travelTimeDisplay}</span>`;
+    }
+    
+    // Source badge
+    const feedSource = item.feed_source || item.source || '';
+    const sourceBadge = feedSource ? `<span class="info-badge" style="color:#9ca3af;font-size:0.8rem;">${feedSource}</span>` : '';
+    
+    // Clean explanation - truncate for card view
+    let explanation = (item.explanation || item.description || '').replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ').replace(/^[^a-zA-Z0-9]+/, '').replace(/\s+/g, ' ').trim();
+    if (explanation.length > 150) explanation = explanation.substring(0, 147) + '…';
+    
+    // Price badge
+    const priceBadge = item.price_flag && item.price_flag.toLowerCase() === 'free' 
+        ? '<span class="info-badge" style="color:#059669;font-weight:600;">Free</span>' 
+        : (item.price_flag && item.price_flag !== '$' ? `<span class="info-badge">${item.price_flag}</span>` : '');
+    
+    // Card image
+    const cardImageUrl = item.photo_url || getPlaceImageUrl(item.category, item.title, item.kid_friendly);
+    const categoryEmojis = {
+        'parks': '🌲', 'museums': '🏛️', 'food': '🍽️', 'attractions': '🎢',
+        'entertainment': '🎭', 'shopping': '🛍️', 'events': '🎪', 'nature': '🌿',
+        'family': '👨‍👩‍👧‍👦', 'community': '🏘️'
+    };
+    const placeholderEmoji = categoryEmojis[item.category] || '📍';
+
     card.innerHTML = `
+        <div class="card-image-container">
+            <img class="card-image" src="${cardImageUrl}" alt="" loading="lazy"
+                 onload="this.classList.add('loaded')"
+                 onerror="this.style.display='none'">
+        </div>
         <div class="card-header">
             <div>
                 <div class="card-title">${item.title}</div>
@@ -2290,22 +2577,32 @@ function createRecommendationCard(item) {
         </div>
         ${eventDateDisplay ? `<div class="card-event-date">📅 ${eventDateDisplay}</div>` : ''}
         <div class="card-info">
-            <span class="info-badge">📍 ${distanceDisplay}</span>
-            <span class="info-badge ${trafficClass}">⏱️ ${travelTimeDisplay} ${!isDistanceNA ? `(${trafficLabel})` : ''}</span>
+            ${locationBadge}
             ${item.kid_friendly ? '<span class="info-badge">👶 Kid-friendly</span>' : ''}
+            ${priceBadge}
+            ${sourceBadge}
         </div>
-        <div class="card-explanation">${(item.explanation || '').replace(/<[^>]*>/g, ' ').replace(/&[^;]+;/g, ' ').replace(/^[^a-zA-Z0-9]+/, '').replace(/\s+/g, ' ').trim()}</div>
+        ${explanation ? `<div class="card-explanation">${explanation}</div>` : ''}
         <div class="card-actions">
             <button class="btn btn-primary" onclick="event.stopPropagation(); showDetail('${item.rec_id}')" style="width: auto;">View Details</button>
             ${item.event_link ? `<a href="${item.event_link}" target="_blank" rel="noopener" class="btn btn-secondary" onclick="event.stopPropagation();" title="Event Link">🔗</a>` : ''}
+            <button class="btn btn-secondary feedback-btn" data-place-id="${item.place_id}" data-feedback="thumbs_up" onclick="event.stopPropagation(); handleThumbsFeedback('${item.rec_id}', '${item.place_id}', '${item.category || ''}', 'thumbs_up', event)" title="Like this">👍</button>
+            <button class="btn btn-secondary feedback-btn" data-place-id="${item.place_id}" data-feedback="thumbs_down" onclick="event.stopPropagation(); handleThumbsFeedback('${item.rec_id}', '${item.place_id}', '${item.category || ''}', 'thumbs_down', event)" title="Not for me">👎</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'favorite', event)" title="Favorite">⭐</button>
             <button class="btn btn-secondary" onclick="event.stopPropagation(); handleFeedback('${item.rec_id}', 'already_been', event)" title="Already been here">✅</button>
+            <button class="btn btn-secondary" onclick="event.stopPropagation(); shareRecommendation('${item.rec_id}')" title="Share">📤</button>
         </div>
     `;
     
-    // Make entire card clickable
+    // Make entire card clickable and keyboard-accessible
     card.addEventListener('click', () => {
         showDetail(item.rec_id);
+    });
+    card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            showDetail(item.rec_id);
+        }
     });
     
     return card;
@@ -2314,6 +2611,15 @@ function createRecommendationCard(item) {
 async function showDetail(recId) {
     const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
     if (!item) return;
+
+    // Track click for personalization
+    try {
+        fetch(`${API_BASE}/track/click`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ place_id: item.place_id, rec_id: recId, category: item.category })
+        });
+    } catch (e) { /* silent */ }
     
     const modal = document.getElementById('detail-modal');
     const content = document.getElementById('detail-content');
@@ -2527,8 +2833,9 @@ async function showDetail(recId) {
                 <button class="slot-btn" onclick="selectSlot('SUN_PM')">Sunday Afternoon</button>
             </div>
         </div>
-        <div style="margin-top: 1rem; padding-top: 1rem;">
-            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')">Add to Calendar</button>
+        <div style="margin-top: 1rem; padding-top: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button class="btn btn-success" id="add-to-calendar-btn" onclick="addToCalendar('${recId}')" style="flex: 1;">Add to Calendar</button>
+            <button class="btn btn-secondary" onclick="shareRecommendation('${recId}')" style="flex: 0 0 auto;">📤 Share</button>
         </div>
     `;
     
@@ -2596,9 +2903,20 @@ function buildImageSearchQuery(item, address, cityState) {
     return [title, combined, location].filter(Boolean).join(' ').trim() || title;
 }
 
-function getPlaceImageUrl(category, title) {
+function getPlaceImageUrl(category, title, kidFriendly) {
     // Curated Unsplash images by category
     const categoryImages = {
+        'family': [
+            'https://images.unsplash.com/photo-1536640712-4d4c36ff0e4e?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1484820540004-14229fe36ca4?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1596464716127-f2a82984de30?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1587654780291-39c9404d7dd0?w=800&h=400&fit=crop'
+        ],
+        'events': [
+            'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1505236858219-8359eb29e329?w=800&h=400&fit=crop',
+            'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&h=400&fit=crop'
+        ],
         'parks': [
             'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=800&h=400&fit=crop',
             'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=800&h=400&fit=crop',
@@ -3009,6 +3327,118 @@ function closeDetailModal() {
     document.getElementById('detail-modal').classList.remove('active');
 }
 
+async function loadInterestProfile() {
+    const container = document.getElementById('interest-profile-content');
+    if (!container) return;
+    try {
+        const resp = await fetch(`${API_BASE}/profile/interests`);
+        if (!resp.ok) throw new Error('Failed to load');
+        const data = await resp.json();
+        const affinity = data.affinity_scores || {};
+        const signals = data.signals || {};
+
+        const categories = Object.entries(affinity).sort((a, b) => b[1] - a[1]);
+
+        let html = '';
+        if (categories.length === 0) {
+            html = '<p style="color: #999;">No preferences learned yet. Like, save, or visit places to personalize your recommendations!</p>';
+        } else {
+            html += '<div style="margin-bottom: 1rem;">';
+            for (const [cat, score] of categories) {
+                const pct = Math.round((score + 1) / 2 * 100);
+                const color = score > 0 ? '#22c55e' : score < 0 ? '#ef4444' : '#9ca3af';
+                const emoji = { parks: '🌳', museums: '🏛️', food: '🍽️', attractions: '🎡', events: '🎪', shopping: '🛍️', entertainment: '🎭', nature: '🌿', arts: '🎨' }[cat] || '📍';
+                html += `<div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="width: 120px; font-size: 0.9rem;">${emoji} ${cat}</span>
+                    <div style="flex: 1; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;">
+                        <div style="width: ${pct}%; height: 100%; background: ${color}; border-radius: 4px;"></div>
+                    </div>
+                    <span style="width: 50px; text-align: right; font-size: 0.8rem; color: ${color};">${score > 0 ? '+' : ''}${score}</span>
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        html += `<div style="font-size: 0.8rem; color: #999; margin-top: 0.5rem;">
+            Signals: ${signals.thumbs_up || 0} 👍 · ${signals.thumbs_down || 0} 👎 · ${signals.saved || 0} ⭐ · ${signals.visited || 0} ✅ · ${signals.clicks || 0} clicks
+        </div>`;
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = '<p style="color: #ef4444;">Failed to load interest profile.</p>';
+    }
+}
+
+async function resetInterestProfile(clearAll) {
+    const msg = clearAll
+        ? 'This will clear all your feedback and click data. Continue?'
+        : 'This will reset personalized ranking (keeps your feedback data). Continue?';
+    if (!confirm(msg)) return;
+    try {
+        await fetch(`${API_BASE}/profile/interests/reset`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear_feedback: !!clearAll })
+        });
+        loadInterestProfile();
+    } catch (e) {
+        alert('Failed to reset profile.');
+    }
+}
+
+async function loadFeedbackStatus() {
+    try {
+        const resp = await fetch(`${API_BASE}/feedback/status`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const feedbackMap = data.feedback || {};
+        document.querySelectorAll('.feedback-btn').forEach(btn => {
+            const placeId = btn.dataset.placeId;
+            const feedbackType = btn.dataset.feedback;
+            if (feedbackMap[placeId] === feedbackType) {
+                btn.classList.add('feedback-active');
+                btn.style.background = feedbackType === 'thumbs_up' ? '#d4edda' : '#f8d7da';
+            }
+        });
+    } catch (e) { /* silent */ }
+}
+
+async function handleThumbsFeedback(recId, placeId, category, action, event) {
+    try {
+        const btn = event?.target;
+        const isActive = btn?.classList.contains('feedback-active');
+
+        if (isActive) {
+            // Remove feedback
+            await fetch(`${API_BASE}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rec_id: recId, action: 'remove_feedback', place_id: placeId })
+            });
+            btn.classList.remove('feedback-active');
+            btn.style.background = '';
+        } else {
+            await fetch(`${API_BASE}/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rec_id: recId, action, place_id: placeId, category })
+            });
+            // Clear sibling feedback button state
+            if (btn) {
+                const parent = btn.parentElement;
+                parent.querySelectorAll('.feedback-btn').forEach(b => {
+                    b.classList.remove('feedback-active');
+                    b.style.background = '';
+                });
+                btn.classList.add('feedback-active');
+                btn.style.background = action === 'thumbs_up' ? '#d4edda' : '#f8d7da';
+            }
+        }
+    } catch (error) {
+        console.error('Thumbs feedback error:', error);
+    }
+}
+
 async function handleFeedback(recId, action, event) {
     // Find the place_id from current digest
     const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
@@ -3119,6 +3549,10 @@ window.selectEventType = selectEventType;
 window.saveToGoogleCalendar = saveToGoogleCalendar;
 window.closeDetailModal = closeDetailModal;
 window.handleFeedback = handleFeedback;
+window.resetInterestProfile = resetInterestProfile;
+window.handleThumbsFeedback = handleThumbsFeedback;
+window.loadAffinityScores = loadAffinityScores;
+window.resetAffinityScores = resetAffinityScores;
 window.showForgotPassword = showForgotPassword;
 window.closeForgotPasswordModal = closeForgotPasswordModal;
 window.handleForgotPassword = handleForgotPassword;
@@ -3267,6 +3701,144 @@ async function handleResetPassword() {
         errEl.style.display = 'block';
     }
 }
+
+// ==================== EMPTY STATE ====================
+
+function buildEmptyState() {
+    const suggestions = [];
+    const travelRanges = onboardingData.travel_time_ranges || [];
+    const maxTravel = getMaxTravelTimeMinutes();
+
+    if (maxTravel <= 15) {
+        suggestions.push({
+            icon: '🗺️',
+            text: 'Expand your travel time to 30+ minutes',
+            action: 'expandTravelTime()'
+        });
+    }
+    if ((onboardingData.interests || []).length <= 3) {
+        suggestions.push({
+            icon: '🎯',
+            text: 'Add more interests for wider results',
+            action: 'editPreference("interests")'
+        });
+    }
+    if (onboardingData.budget === 'free') {
+        suggestions.push({
+            icon: '💰',
+            text: 'Include paid activities for more options',
+            action: null
+        });
+    }
+    suggestions.push({
+        icon: '📍',
+        text: 'Try a different location',
+        action: 'editPreference("location")'
+    });
+
+    return `
+        <div class="empty-state" role="status">
+            <div class="empty-state-icon">🔍</div>
+            <h3 class="empty-state-title">No recommendations found</h3>
+            <p class="empty-state-subtitle">Here are some things you can try:</p>
+            <div class="empty-state-suggestions">
+                ${suggestions.map(s => `
+                    <div class="empty-suggestion" ${s.action ? `onclick="${s.action}" style="cursor:pointer"` : ''}>
+                        <span class="empty-suggestion-icon">${s.icon}</span>
+                        <span>${s.text}</span>
+                        ${s.action ? '<span class="empty-suggestion-arrow">→</span>' : ''}
+                    </div>
+                `).join('')}
+            </div>
+            <button class="btn btn-primary" onclick="refreshRecommendations()" style="width: auto; margin-top: 1.5rem;">
+                Try Again
+            </button>
+        </div>
+    `;
+}
+
+function expandTravelTime() {
+    // Add 30-60 to travel time ranges
+    const btn30 = document.querySelector('.travel-time-toggles .quick-toggle[data-value="30-60"]');
+    if (btn30 && !btn30.classList.contains('active')) {
+        btn30.classList.add('active');
+    }
+    gatherQuickAdjustments();
+    loadDashboardRecommendations();
+}
+
+window.expandTravelTime = expandTravelTime;
+
+function retryWithBackoff() {
+    const btn = document.getElementById('retry-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Retrying...';
+    }
+    retryCount++;
+    if (retryCount > MAX_RETRIES) {
+        retryCount = 0; // Reset for next attempt
+    }
+    const delay = getRetryDelay();
+    setTimeout(() => {
+        refreshRecommendations();
+    }, delay);
+}
+
+window.retryWithBackoff = retryWithBackoff;
+
+// ==================== SHARE ====================
+
+async function shareRecommendation(recId) {
+    const item = window.currentDigest?.items?.find(i => i.rec_id === recId);
+    if (!item) return;
+
+    const title = item.title || 'Activity Recommendation';
+    const url = item.event_link || item.source_url || item.google_maps_url || '';
+    const text = `Check out ${title}${item.address ? ' at ' + item.address : ''}`;
+
+    // Try native Web Share API (works great on mobile)
+    if (navigator.share) {
+        try {
+            await navigator.share({ title, text, url });
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return; // user cancelled
+        }
+    }
+
+    // Fallback: copy to clipboard
+    const shareText = url ? `${text}\n${url}` : text;
+    try {
+        await navigator.clipboard.writeText(shareText);
+        showToast('Link copied to clipboard!');
+    } catch {
+        // Last resort: prompt
+        prompt('Copy this link:', shareText);
+    }
+}
+
+function showToast(message, duration = 2500) {
+    // Remove existing toast
+    const existing = document.getElementById('toast-notification');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'toast-notification';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => toast.classList.add('visible'));
+    setTimeout(() => {
+        toast.classList.remove('visible');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+window.shareRecommendation = shareRecommendation;
 
 function clearCache() {
     localStorage.clear();

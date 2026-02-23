@@ -64,6 +64,10 @@ places_cache = {}
 geocode_cache = {}
 # Cache for image search (query -> url) to avoid hitting API limits
 image_search_cache = {}
+# In-memory warm cache for recommendations (key -> {items, sources, timestamp})
+_warm_cache = {}
+_warm_cache_lock = None  # Lazy-initialized threading lock
+_background_refresh_in_progress = set()  # Track in-flight background refreshes
 
 # Circuit breaker pattern for external APIs
 _circuit_breakers = {}  # {source: {failures: int, last_failure: datetime, total_calls: int}}
@@ -410,25 +414,224 @@ def reverse_geocode():
         return jsonify({"error": "Reverse geocoding failed"}), 500
 
 
+def scrape_og_image(url, timeout=3):
+    """Fetch a page and extract og:image or first large image. Fast and reliable for event pages."""
+    if not url or not url.startswith('http'):
+        return None
+    cache_key = f"og_img:{url[:200]}"
+    if cache_key in image_search_cache:
+        return image_search_cache[cache_key].get("url")
+    try:
+        import re as _re
+        r = requests.get(url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html"
+        }, allow_redirects=True)
+        if r.status_code != 200:
+            image_search_cache[cache_key] = {"url": None}
+            return None
+        # Only check first 50KB to stay fast
+        html = r.text[:50000]
+        # 1. og:image
+        m = _re.search(r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\'](https?://[^"\']+)["\']', html, _re.I)
+        if not m:
+            m = _re.search(r'<meta[^>]*content=["\'](https?://[^"\']+)["\'][^>]*property=["\']og:image["\']', html, _re.I)
+        if m:
+            img_url = m.group(1)
+            # Skip tiny/pixel images
+            if 'pixel' not in img_url and '1x1' not in img_url and 'spacer' not in img_url:
+                image_search_cache[cache_key] = {"url": img_url, "source": "og:image"}
+                print(f"[OG_IMAGE] Found og:image for {url[:60]}: {img_url[:80]}")
+                return img_url
+        # 2. twitter:image
+        m = _re.search(r'<meta[^>]*(?:name|property)=["\']twitter:image["\'][^>]*content=["\'](https?://[^"\']+)["\']', html, _re.I)
+        if m:
+            img_url = m.group(1)
+            image_search_cache[cache_key] = {"url": img_url, "source": "twitter:image"}
+            print(f"[OG_IMAGE] Found twitter:image for {url[:60]}: {img_url[:80]}")
+            return img_url
+        image_search_cache[cache_key] = {"url": None}
+    except Exception as e:
+        print(f"[OG_IMAGE] Error fetching {url[:60]}: {e}")
+        image_search_cache[cache_key] = {"url": None}
+    return None
+
+
+def search_free_image(query, event_url=None, timeout=3):
+    """
+    Search for an image using free sources (no API key needed):
+    0. Scrape og:image from event URL (most reliable for events)
+    1. Wikipedia/Wikimedia Commons REST API
+    2. DuckDuckGo Instant Answer API
+    Returns image URL or None if not found.
+    """
+    # Try og:image first (fastest, most reliable for events)
+    if event_url:
+        og_url = scrape_og_image(event_url, timeout=min(timeout, 2))
+        if og_url:
+            return og_url, "og:image"
+
+    if not query or len(query) < 2:
+        return None, None
+    
+    cache_key = f"free_img:{query[:100]}"
+    if cache_key in image_search_cache:
+        cached = image_search_cache[cache_key]
+        return cached.get("url"), cached.get("source")
+    
+    url = None
+    source = None
+    
+    # 1. Try Wikipedia/Wikimedia Commons REST API
+    try:
+        # Clean the query - use title part and remove location info
+        wiki_query = query.replace(" San Francisco", "").replace(" SF", "").replace(" CA", "")
+        wiki_query = wiki_query.replace(" Bay Area", "").replace(" Oakland", "").replace(" Berkeley", "")
+        wiki_query = wiki_query.strip()
+        
+        wiki_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{wiki_query.replace(' ', '_')}"
+        r = requests.get(wiki_url, timeout=timeout, headers={"User-Agent": "ActivityPlanner/1.0"})
+        
+        if r.status_code == 200:
+            data = r.json()
+            thumbnail = data.get("thumbnail", {})
+            if thumbnail and thumbnail.get("source"):
+                # Get higher resolution version if available
+                img_url = thumbnail["source"]
+                # Try to get larger version by modifying URL
+                if "/thumb/" in img_url:
+                    img_url = img_url.replace("/320px-", "/800px-")
+                url = img_url
+                source = "wikipedia"
+                print(f"[FREE_IMAGE] Found Wikipedia image for '{query}': {url}")
+    except Exception as e:
+        print(f"[FREE_IMAGE] Wikipedia error for '{query}': {e}")
+    
+    # 2. Try DuckDuckGo Instant Answer API
+    if not url:
+        try:
+            ddg_url = "https://api.duckduckgo.com/"
+            r = requests.get(ddg_url, params={"q": query, "format": "json"}, timeout=timeout, 
+                           headers={"User-Agent": "ActivityPlanner/1.0"})
+            
+            if r.status_code == 200:
+                data = r.json()
+                image_url = data.get("Image")
+                if image_url:
+                    # DuckDuckGo sometimes returns relative URLs
+                    if image_url.startswith("//"):
+                        image_url = "https:" + image_url
+                    elif image_url.startswith("/"):
+                        image_url = "https://duckduckgo.com" + image_url
+                    
+                    if image_url.startswith("http"):
+                        url = image_url
+                        source = "duckduckgo"
+                        print(f"[FREE_IMAGE] Found DuckDuckGo image for '{query}': {url}")
+        except Exception as e:
+            print(f"[FREE_IMAGE] DuckDuckGo error for '{query}': {e}")
+    
+    # Cache result (even if None)
+    image_search_cache[cache_key] = {"url": url, "source": source}
+    return url, source
+
+
+def fetch_google_place_photo(title, location, lat=None, lng=None):
+    """
+    Fetch a photo for a place using Google Places Photo API.
+    Returns the direct googleusercontent.com URL (permanent-ish, safe to cache).
+    Returns None if no photo found or API error.
+    """
+    if not GOOGLE_PLACES_API_KEY:
+        return None
+    
+    # Build search query combining title and location
+    query_parts = [title]
+    if location and location.lower() not in title.lower():
+        query_parts.append(location)
+    
+    text_query = " ".join(query_parts).strip()
+    if not text_query:
+        return None
+    
+    try:
+        # Step 1: Search for the place
+        search_url = 'https://places.googleapis.com/v1/places:searchText'
+        headers = {
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.photos'
+        }
+        
+        search_data = {
+            'textQuery': text_query,
+            'maxResultCount': 1
+        }
+        
+        # Add location bias if lat/lng provided
+        if lat is not None and lng is not None:
+            search_data['locationBias'] = {
+                'circle': {
+                    'center': {'latitude': lat, 'longitude': lng},
+                    'radius': 10000  # 10km radius
+                }
+            }
+        
+        response = requests.post(search_url, headers=headers, json=search_data, timeout=2)
+        
+        if response.status_code != 200:
+            print(f"[GOOGLE_PLACES] Search failed for '{text_query}': HTTP {response.status_code}")
+            return None
+        
+        data = response.json()
+        places = data.get('places', [])
+        
+        if not places or not places[0].get('photos'):
+            print(f"[GOOGLE_PLACES] No photos found for '{text_query}'")
+            return None
+        
+        photo_name = places[0]['photos'][0]['name']
+        
+        # Step 2: Get the photo URL (returns 302 redirect)
+        photo_url = f'https://places.googleapis.com/v1/{photo_name}/media?maxWidthPx=800&key={GOOGLE_PLACES_API_KEY}'
+        
+        photo_response = requests.get(photo_url, timeout=1, allow_redirects=False)
+        
+        if photo_response.status_code == 302:
+            redirect_url = photo_response.headers.get('Location')
+            if redirect_url and 'googleusercontent.com' in redirect_url:
+                print(f"[GOOGLE_PLACES] Found photo for '{text_query}': {redirect_url}")
+                return redirect_url
+        
+        print(f"[GOOGLE_PLACES] Photo redirect failed for '{text_query}': HTTP {photo_response.status_code}")
+        return None
+        
+    except Exception as e:
+        print(f"[GOOGLE_PLACES] Error fetching photo for '{text_query}': {e}")
+        return None
+
+
 @app.route('/v1/image-search', methods=['GET'])
 def image_search():
     """
     Search for an image by query (keywords from title + event detail + location).
-    Uses Google Custom Search API (Google Images) if configured, else Pexels, else Unsplash.
+    Uses free sources first, then Google Custom Search API (Google Images) if configured, else Pexels, else Unsplash.
     Returns first relevant image URL for the location/event.
     """
     query = request.args.get('q', '').strip()
     if not query or len(query) < 2:
         return jsonify({"url": None, "source": None}), 200
 
+    # Try free sources first
+    url, source = search_free_image(query)
+    if url:
+        return jsonify({"url": url, "source": source}), 200
+
     cache_key = f"img:{query[:100]}"
     if cache_key in image_search_cache:
         cached = image_search_cache[cache_key]
         return jsonify({"url": cached.get("url"), "source": cached.get("source")}), 200
 
-    url = None
-    source = None
-
+    # Fallback to paid APIs if configured
     # 1. Try Google Custom Search (Google Images)
     if GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX:
         try:
@@ -501,6 +704,80 @@ def image_search():
 
 # ========== RECOMMENDATIONS ==========
 
+# ========== USER AFFINITY / PERSONALIZATION ==========
+
+def get_user_affinity_scores(user_id):
+    """
+    Compute category affinity scores from user behavior.
+    Weights: saves (strong+), visits (moderate+), thumbs_up (strong+), thumbs_down (negative), clicks (weak+).
+    Returns dict like {"parks": 0.8, "food": 0.3, "museums": -0.2} or {} for new users.
+    Cached per user, recomputed hourly or on new interaction.
+    """
+    # Check cache first
+    cached = db.get_affinity_cache(user_id)
+    if cached is not None:
+        return cached
+
+    affinity = {}
+
+    def _add(category, weight):
+        if category:
+            affinity[category] = affinity.get(category, 0.0) + weight
+
+    # Saves: strong positive (+0.3 each)
+    saved = db.get_saved_list(user_id)
+    for s in saved:
+        # Need category - look up from mock or recent recs
+        cat = _get_category_for_place(user_id, s['place_id'])
+        _add(cat, 0.3)
+
+    # Visits: moderate positive (+0.2 each)
+    visited = db.get_visited_list(user_id)
+    for v in visited:
+        cat = _get_category_for_place(user_id, v['place_id'])
+        _add(cat, 0.2)
+
+    # Feedback: thumbs_up (+0.4), thumbs_down (-0.5)
+    feedback = db.get_all_feedback(user_id)
+    for f in feedback:
+        cat = f.get('category') or _get_category_for_place(user_id, f['place_id'])
+        if f['feedback_type'] == 'thumbs_up':
+            _add(cat, 0.4)
+        elif f['feedback_type'] == 'thumbs_down':
+            _add(cat, -0.5)
+
+    # Clicks: weak positive (+0.1 each)
+    click_counts = db.get_click_counts_by_category(user_id)
+    for cat, cnt in click_counts.items():
+        _add(cat, 0.1 * min(cnt, 10))  # Cap at 10 clicks
+
+    # Normalize to [-1, 1] range
+    if affinity:
+        max_abs = max(abs(v) for v in affinity.values()) or 1.0
+        if max_abs > 1.0:
+            affinity = {k: round(v / max_abs, 2) for k, v in affinity.items()}
+        else:
+            affinity = {k: round(v, 2) for k, v in affinity.items()}
+
+    # Cache result
+    db.set_affinity_cache(user_id, affinity)
+    return affinity
+
+
+def _get_category_for_place(user_id, place_id):
+    """Look up category for a place_id from mock data or cached recommendations."""
+    # Check mock data
+    for p in MOCK_PLACES:
+        if p.get('place_id') == place_id:
+            return p.get('category')
+    # Check warm cache
+    for cache_entry in _warm_cache.values():
+        for item in cache_entry.get('items', []):
+            if item.get('place_id') == place_id:
+                return item.get('category')
+    return None
+
+
 # ========== CIRCUIT BREAKER PATTERN ==========
 
 def is_circuit_open(source):
@@ -547,31 +824,244 @@ def record_failure(source):
 
 # ========== RECOMMENDATION ENGINE ==========
 
+def _get_warm_cache_key(user_id, prefs):
+    """Generate a stable cache key for warm cache lookups."""
+    import hashlib
+    home_location = prefs.get('home_location', {})
+    categories = prefs.get('categories', [])
+    location_str = home_location.get('formatted_address') or home_location.get('input') or ''
+    kid_friendly = prefs.get('kid_friendly', False)
+    travel_time_ranges = prefs.get('travel_time_ranges', [])
+    cache_key_data = f"{user_id}|{location_str}|{','.join(sorted(categories))}|{kid_friendly}|{','.join(sorted(travel_time_ranges))}"
+    return hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
+
+
+def _refresh_recommendations_background(user_id, prefs, cache_key):
+    """Background thread to refresh recommendations and update warm cache."""
+    global _warm_cache, _background_refresh_in_progress
+    try:
+        items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+        if items:
+            _warm_cache[cache_key] = {
+                'items': items,
+                'sources': sources,
+                'timestamp': datetime.now()
+            }
+            print(f"[WARM_CACHE] Background refresh done: {len(items)} items for key {cache_key}")
+    except Exception as e:
+        print(f"[WARM_CACHE] Background refresh error: {e}")
+    finally:
+        _background_refresh_in_progress.discard(cache_key)
+
+
+# Warm cache TTL: serve from cache if < 15 min old, trigger background refresh if > 5 min old
+WARM_CACHE_FRESH_SECONDS = 300   # 5 min: fully fresh, no refresh needed
+WARM_CACHE_STALE_SECONDS = 900   # 15 min: stale but serveable, trigger background refresh
+
+
 def get_recommendations(user_id, prefs):
     """
-    Main recommendation engine with fallback chain:
+    Main recommendation engine with stale-while-revalidate pattern:
+    1. Check in-memory warm cache — serve immediately if available
+    2. If cache is stale (>5min), trigger background refresh
+    3. If no cache, fetch live (blocking)
+    4. Fallback chain: Google Places -> Local feeds -> DB cache -> Mock data
+    """
+    import hashlib
+    import threading
+    global _warm_cache_lock
+    if _warm_cache_lock is None:
+        _warm_cache_lock = threading.Lock()
+    
+    cache_key = _get_warm_cache_key(user_id, prefs)
+    print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
+    
+    # Step 0: Check warm cache (stale-while-revalidate)
+    cached = _warm_cache.get(cache_key)
+    if cached:
+        age_seconds = (datetime.now() - cached['timestamp']).total_seconds()
+        if age_seconds < WARM_CACHE_STALE_SECONDS:
+            print(f"[WARM_CACHE] Hit! age={age_seconds:.0f}s, items={len(cached['items'])}")
+            # If stale (>5min), trigger background refresh
+            if age_seconds > WARM_CACHE_FRESH_SECONDS and cache_key not in _background_refresh_in_progress:
+                _background_refresh_in_progress.add(cache_key)
+                t = threading.Thread(
+                    target=_refresh_recommendations_background,
+                    args=(user_id, prefs, cache_key),
+                    daemon=True
+                )
+                t.start()
+                print(f"[WARM_CACHE] Triggered background refresh (stale)")
+            return cached['items'], cached['sources']
+    
+    # No warm cache — fetch live (blocking)
+    items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+    
+    # Store in warm cache
+    if items:
+        _warm_cache[cache_key] = {
+            'items': items,
+            'sources': sources,
+            'timestamp': datetime.now()
+        }
+    
+    return items, sources
+
+
+def enrich_items_with_images(items, max_time_seconds=4):
+    """
+    Enrich recommendation items with real images using free sources.
+    Uses ThreadPoolExecutor to fetch images in parallel without blocking.
+    Limited to max_time_seconds to avoid adding latency.
+    """
+    import concurrent.futures
+    import time
+    
+    start_time = time.time()
+    enriched_items = []
+    
+    def fetch_image_for_item(item):
+        try:
+            title = item.get('title', '')
+            location = item.get('address', '') or item.get('location_str', '')
+            
+            # If item already has a photo, just ensure it has photo_source
+            if item.get('photo_url'):
+                item_copy = item.copy()
+                if not item_copy.get('photo_source'):
+                    # Detect source based on URL pattern
+                    photo_url = item_copy['photo_url']
+                    if 'maps.googleapis.com' in photo_url:
+                        item_copy['photo_source'] = 'google_places_old'
+                    elif 'googleusercontent.com' in photo_url:
+                        item_copy['photo_source'] = 'google_places'
+                    elif 'luma-' in photo_url or 'og:image' in str(item):
+                        item_copy['photo_source'] = 'og:image'
+                    else:
+                        item_copy['photo_source'] = 'unknown'
+                return item_copy
+            
+            # Get event URL for og:image scraping
+            event_url = item.get('event_link') or item.get('source_url') or item.get('link') or ''
+            
+            # Build search query: title + location for better results
+            query_parts = [title]
+            if location and location.lower() not in title.lower():
+                # Add city/area for context
+                loc_clean = location.replace(" CA", "").replace(" California", "").split(",")[0].strip()
+                if loc_clean and loc_clean.lower() not in title.lower():
+                    query_parts.append(loc_clean)
+            
+            query = " ".join(query_parts).strip()
+            
+            # First check SQLite cache
+            cached_url, cached_source = db.get_cached_photo(query)
+            if cached_url:
+                item_copy = item.copy()
+                item_copy['photo_url'] = cached_url
+                item_copy['photo_source'] = cached_source
+                print(f"[IMAGE_ENRICH] Using cached image for '{title}' from {cached_source}")
+                return item_copy
+            
+            # Also check in-memory cache for this session
+            cache_key = f"free_img:{query[:100]}"
+            if cache_key in image_search_cache:
+                cached = image_search_cache[cache_key]
+                cached_url = cached.get("url")
+                cached_source = cached.get("source")
+                if cached_url:
+                    item_copy = item.copy()
+                    item_copy['photo_url'] = cached_url
+                    item_copy['photo_source'] = cached_source
+                    # Also save to SQLite cache
+                    db.cache_photo(query, cached_url, cached_source)
+                    return item_copy
+            
+            image_url = None
+            source = None
+            
+            # Try Google Places Photo API first (if configured)
+            if GOOGLE_PLACES_API_KEY:
+                lat = item.get('latitude') or item.get('lat')
+                lng = item.get('longitude') or item.get('lng')
+                google_url = fetch_google_place_photo(title, location, lat, lng)
+                if google_url:
+                    image_url = google_url
+                    source = "google_places"
+            
+            # Fall back to free sources if Google Places didn't work
+            if not image_url:
+                image_url, source = search_free_image(query, event_url=event_url)
+            
+            # Update item with image if found
+            item_copy = item.copy()
+            if image_url:
+                item_copy['photo_url'] = image_url
+                item_copy['photo_source'] = source
+                # Cache the result in SQLite
+                db.cache_photo(query, image_url, source)
+                print(f"[IMAGE_ENRICH] Found image for '{title}' from {source}")
+            
+            return item_copy
+            
+        except Exception as e:
+            print(f"[IMAGE_ENRICH] Error enriching '{item.get('title', 'item')}': {e}")
+            return item
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # Submit all image search tasks
+        future_to_item = {executor.submit(fetch_image_for_item, item): item for item in items}
+        
+        # Collect results with timeout
+        try:
+            for future in concurrent.futures.as_completed(future_to_item, timeout=max_time_seconds):
+                try:
+                    enriched_item = future.result(timeout=0.5)
+                    enriched_items.append(enriched_item)
+                except Exception as e:
+                    original_item = future_to_item[future]
+                    enriched_items.append(original_item)
+                    print(f"[IMAGE_ENRICH] Error processing item: {e}")
+                
+                # Check overall time limit
+                if time.time() - start_time > max_time_seconds:
+                    break
+        except (TimeoutError, concurrent.futures.TimeoutError):
+            print(f"[IMAGE_ENRICH] Global timeout after {time.time() - start_time:.1f}s")
+    
+    # Add any remaining items that didn't complete
+    completed_items = len(enriched_items)
+    if completed_items < len(items):
+        remaining_items = items[completed_items:]
+        enriched_items.extend(remaining_items)
+        print(f"[IMAGE_ENRICH] Timeout: enriched {completed_items}/{len(items)} items")
+    
+    elapsed = time.time() - start_time
+    success_count = sum(1 for item in enriched_items if item.get('photo_url'))
+    google_count = sum(1 for item in enriched_items if item.get('photo_source') == 'google_places')
+    print(f"[IMAGE_ENRICH] Completed in {elapsed:.1f}s: {success_count}/{len(items)} items got images ({google_count} from Google Places)")
+    
+    return enriched_items
+
+
+def _fetch_recommendations_live(user_id, prefs, cache_key):
+    """
+    Live fetch from all sources with fallback chain:
     1. Try Google Places API (if key configured)
-    2. Try local feeds (parallel fetch, 15s timeout)  
+    2. Try local feeds (parallel fetch, 5s timeout)
     3. Merge and rank results
     4. Cache successful results
     5. If all live sources fail, return cached results
-    6. If no cache, return enriched mock data (compute distances from user location)
+    6. If no cache, return enriched mock data
     """
     from datetime import datetime, timedelta
-    import hashlib
     
-    # Generate cache key from user preferences
+    # Resolve user location
     home_location = prefs.get('home_location', {})
     user_lat, user_lng = resolve_user_location(home_location)
     categories = prefs.get('categories', [])
-    location_str = home_location.get('formatted_address') or home_location.get('input') or f"{user_lat},{user_lng}"
     kid_friendly = prefs.get('kid_friendly', False)
     travel_time_ranges = prefs.get('travel_time_ranges', [])
-    
-    cache_key_data = f"{user_id}|{location_str}|{','.join(sorted(categories))}|{kid_friendly}|{','.join(sorted(travel_time_ranges))}"
-    cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
-    
-    print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
     
     # Step 1: Try to get from cache first
     cached = db.get_cached_recommendations(user_id, cache_key)
@@ -634,7 +1124,7 @@ def get_recommendations(user_id, prefs):
                 user_lat=user_lat,
                 user_lng=user_lng,
                 geocode_fn=geocode_to_lat_lng,
-                max_items=10,
+                max_items=20,
                 max_travel_min=max_travel_min,
                 max_radius_miles=max_radius_miles,
                 week_str=week_str
@@ -689,28 +1179,69 @@ def get_recommendations(user_id, prefs):
         
         print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
         
-        # Rank by mix of places vs events (aim for ~60% places, ~40% events)
-        places = [item for item in filtered_items if item.get('type') == 'place']
-        events = [item for item in filtered_items if item.get('type') == 'event']
+        # Get user affinity scores for personalized re-ranking
+        user_affinity = get_user_affinity_scores(user_id)
+
+        # Score and rank all items together
+        def _item_score(item):
+            score = 0
+            # Strong bonus for items with distance data
+            if item.get('distance_miles') is not None:
+                score += 30
+                # Closer items score higher
+                d = item.get('distance_miles', 50)
+                if d <= 5:
+                    score += 15
+                elif d <= 10:
+                    score += 10
+                elif d <= 20:
+                    score += 5
+            # Rating bonus
+            score += (item.get('rating', 0) or 0) * 5
+            # Events with dates are more actionable
+            if item.get('event_date'):
+                score += 5
+            # Kid-friendly bonus if applicable
+            if kid_friendly and item.get('kid_friendly'):
+                score += 10
+            # Free is a plus
+            if (item.get('price_flag') or '').lower() == 'free':
+                score += 3
+            # Personalization: apply affinity multiplier
+            if user_affinity:
+                cat = item.get('category', '')
+                affinity_val = user_affinity.get(cat, 0.0)
+                # Affinity ranges [-1, 1], apply as bonus/penalty (up to ±15 points)
+                score += affinity_val * 15
+            return score
         
-        # Take top items with desired mix
+        filtered_items.sort(key=_item_score, reverse=True)
+        
+        # Take top 15 items with source diversity
         final_items = []
-        places_target = min(5, len(places))  # Up to 5 places
-        events_target = min(3, len(events))  # Up to 3 events
+        source_counts = {}
+        max_per_source = 6
         
-        # Sort by rating/relevance
-        places.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
-        events.sort(key=lambda x: -(x.get('distance_miles') or 100))  # Events by proximity
+        for item in filtered_items:
+            src = item.get('feed_source') or item.get('type', 'unknown')
+            if source_counts.get(src, 0) >= max_per_source:
+                continue
+            source_counts[src] = source_counts.get(src, 0) + 1
+            final_items.append(item)
+            if len(final_items) >= 15:
+                break
         
-        final_items.extend(places[:places_target])
-        final_items.extend(events[:events_target])
+        # Fill remaining if needed
+        if len(final_items) < 15:
+            for item in filtered_items:
+                if item not in final_items:
+                    final_items.append(item)
+                    if len(final_items) >= 15:
+                        break
         
-        # If we need more items, fill from remaining
-        remaining_needed = 8 - len(final_items)
-        if remaining_needed > 0:
-            remaining = [item for item in filtered_items if item not in final_items]
-            remaining.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
-            final_items.extend(remaining[:remaining_needed])
+        # Step 5: Enrich items with real images (parallel, max 2s)
+        print(f"[RECOMMENDATIONS] Enriching {len(final_items)} items with images...")
+        final_items = enrich_items_with_images(final_items, max_time_seconds=3)
         
         # Cache successful results
         if final_items:
@@ -893,89 +1424,12 @@ def _place_with_distance_from_user(place, user_lat, user_lng):
     return p
 
 
-def filter_places(prefs, user_id, user_lat=None, user_lng=None):
-    """Filter and rank places based on preferences. If user_lat/lng are provided,
-    distance and travel_time are computed from the user's location (so they match ZIP/address)."""
-    filtered = []
-    categories = prefs.get('categories', [])
-    show_all_categories = len(categories) == 0
-    
-    travel_time_ranges = prefs.get('travel_time_ranges', ['15-30'])
-    max_travel_time = get_max_travel_time(travel_time_ranges)
-    radius_limit = get_max_radius_miles(travel_time_ranges)
-    
-    # If user location provided, we'll compute distance/time per place; else use mock values
-    use_user_location = user_lat is not None and user_lng is not None
-    
-    print(f"[DEBUG] Filtering places - categories: {categories}, user_location: {use_user_location}")
-    print(f"[DEBUG] Travel time ranges: {travel_time_ranges}, max_travel_time: {max_travel_time} min, max_radius: {radius_limit} mi")
-    
-    for place in MOCK_PLACES:
-        if use_user_location:
-            place = _place_with_distance_from_user(place, user_lat, user_lng)
-        
-        if place['distance_miles'] > radius_limit:
-            continue
-        if place.get('travel_time_min', 0) > max_travel_time:
-            continue
-        if not show_all_categories and place['category'] not in categories:
-            continue
-        if prefs.get('kid_friendly') is True and not place.get('kid_friendly'):
-            continue
-        if should_dedup(place['place_id'], user_id, prefs):
-            continue
-        
-        filtered.append(place)
-    
-    filtered.sort(key=lambda x: (x['rating'], -x['distance_miles']), reverse=True)
-    
-    result = []
-    category_counts = {}
-    for place in filtered:
-        cat = place['category']
-        category_counts[cat] = category_counts.get(cat, 0) + 1
-        if category_counts[cat] <= 2:
-            result.append(place)
-        if len(result) >= 8:
-            break
-    
-    if len(result) == 0 and len(categories) > 0:
-        relaxed_max_time = int(max_travel_time * 1.5)
-        relaxed_radius = int(radius_limit * 1.5)
-        for place in MOCK_PLACES:
-            if use_user_location:
-                place = _place_with_distance_from_user(place, user_lat, user_lng)
-            if place['distance_miles'] > relaxed_radius or place.get('travel_time_min', 0) > relaxed_max_time:
-                continue
-            if prefs.get('kid_friendly') is True and not place.get('kid_friendly'):
-                continue
-            if should_dedup(place['place_id'], user_id, prefs):
-                continue
-            if place not in result:
-                result.append(place)
-            if len(result) >= 8:
-                break
-
-    # Last resort: return closest places regardless of radius/category filters
-    if len(result) == 0:
-        print(f"[DEBUG] No results after relaxed filter, returning closest places")
-        all_places = []
-        for place in MOCK_PLACES:
-            if use_user_location:
-                place = _place_with_distance_from_user(place, user_lat, user_lng)
-            if should_dedup(place['place_id'], user_id, prefs):
-                continue
-            all_places.append(place)
-        all_places.sort(key=lambda x: x['distance_miles'])
-        result = all_places[:8]
-
-    print(f"[DEBUG] Final result count: {len(result)}")
-    return result
-
 @app.route('/v1/digest', methods=['GET'])
 @require_auth
 def get_digest():
     """Get activity digest for current week using new recommendation engine with fallback chain"""
+    import time as _time
+    _request_start = _time.time()
     user_id = get_user_id()
     prefs = db.get_preferences(user_id) or {}
     
@@ -1006,16 +1460,20 @@ def get_digest():
     try:
         items, sources = get_recommendations(user_id, prefs)
         
+        elapsed_ms = int((_time.time() - _request_start) * 1000)
         response_data = {
             "week": week,
             "generated_at": datetime.now().isoformat(),
             "items": items,
             "sources": sources,  # Show which sources were used
-            "from_cache": 'cache' in sources
+            "from_cache": 'cache' in sources,
+            "response_time_ms": elapsed_ms
         }
         
-        print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)}")
-        return jsonify(response_data)
+        print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)} in {elapsed_ms}ms")
+        resp = jsonify(response_data)
+        resp.headers['X-Response-Time'] = f"{elapsed_ms}ms"
+        return resp
         
     except Exception as e:
         import traceback
@@ -1192,8 +1650,10 @@ def geocode_to_lat_lng(query):
             "san francisco": (37.7749, -122.4194),
             "san francisco, california": (37.7749, -122.4194),
             "san francisco, ca": (37.7749, -122.4194),
-            "oakland": (37.8044, -121.9712),
-            "oakland, ca": (37.8044, -121.9712),
+            "sf": (37.7749, -122.4194),
+            "sf, ca": (37.7749, -122.4194),
+            "oakland": (37.8044, -122.2712),
+            "oakland, ca": (37.8044, -122.2712),
             "berkeley": (37.8716, -122.2727),
             "berkeley, ca": (37.8716, -122.2727),
             "fremont": (37.5485, -121.9886),
@@ -1212,6 +1672,45 @@ def geocode_to_lat_lng(query):
             "hayward, ca": (37.6688, -122.0808),
             "union city": (37.5934, -122.0438),
             "union city, ca": (37.5934, -122.0438),
+            "castro valley": (37.6941, -122.0864),
+            "castro valley, ca": (37.6941, -122.0864),
+            "pleasanton": (37.6624, -121.8747),
+            "pleasanton, ca": (37.6624, -121.8747),
+            "livermore": (37.6819, -121.7680),
+            "livermore, ca": (37.6819, -121.7680),
+            "dublin": (37.7022, -121.9358),
+            "dublin, ca": (37.7022, -121.9358),
+            "san mateo": (37.5630, -122.3255),
+            "san mateo, ca": (37.5630, -122.3255),
+            "redwood city": (37.4852, -122.2364),
+            "redwood city, ca": (37.4852, -122.2364),
+            "santa clara": (37.3541, -121.9552),
+            "santa clara, ca": (37.3541, -121.9552),
+            "cupertino": (37.3230, -122.0322),
+            "cupertino, ca": (37.3230, -122.0322),
+            "milpitas": (37.4323, -121.8996),
+            "milpitas, ca": (37.4323, -121.8996),
+            "san leandro": (37.7249, -122.1561),
+            "san leandro, ca": (37.7249, -122.1561),
+            "walnut creek": (37.9101, -122.0652),
+            "walnut creek, ca": (37.9101, -122.0652),
+            "concord": (37.9780, -122.0311),
+            "concord, ca": (37.9780, -122.0311),
+            "richmond": (37.9358, -122.3478),
+            "richmond, ca": (37.9358, -122.3478),
+            "daly city": (37.6879, -122.4702),
+            "daly city, ca": (37.6879, -122.4702),
+            "south san francisco": (37.6547, -122.4077),
+            "south san francisco, ca": (37.6547, -122.4077),
+            "alameda": (37.7652, -122.2416),
+            "alameda, ca": (37.7652, -122.2416),
+            "kensington": (37.9107, -122.2802),
+            "kensington, ca": (37.9107, -122.2802),
+            "emeryville": (37.8313, -122.2852),
+            "emeryville, ca": (37.8313, -122.2852),
+            "east bay": (37.7749, -122.2000),
+            "east bay, ca": (37.7749, -122.2000),
+            "bay area": (37.6000, -122.1000),
         }
         known_key = cache_key.replace(", usa", "").replace(",usa", "").strip()
         if known_key in _KNOWN_LOCATIONS:
@@ -1406,11 +1905,17 @@ def get_feeds_config():
     return jsonify({"enabled": True, "sources": sources})
 
 
+# ========== PERSONALIZATION ENGINE ==========
+# (Main implementation in get_user_affinity_scores() above, integrated into _item_score)
+
+
 # ========== AI-POWERED RECOMMENDATIONS ==========
 
 @app.route('/v1/recommendations/ai', methods=['POST'])
 def get_ai_recommendations():
     """Get AI-powered recommendations with caching and fallback support."""
+    import time as _time
+    _request_start = _time.time()
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
@@ -1433,39 +1938,43 @@ def get_ai_recommendations():
         'kid_friendly': profile.get('kid_friendly', False)
     }
     
-    # Map interests to categories for filtering
+    # Map interests to categories for filtering (broader mapping for better recall)
     interest_to_category = {
-        'nature': ['parks'],
-        'arts_culture': ['museums'],
-        'food_drinks': ['food'],
-        'adventure': ['attractions'],
-        'learning': ['museums'],
-        'entertainment': ['attractions'],
-        'relaxation': ['parks'],
-        'shopping': ['attractions'],
-        'events': ['events']
+        'nature': ['parks', 'nature'],
+        'arts_culture': ['museums', 'arts_culture', 'arts'],
+        'food_drinks': ['food', 'food_drink', 'food_drinks'],
+        'adventure': ['attractions', 'adventure', 'fitness'],
+        'learning': ['museums', 'learning'],
+        'entertainment': ['attractions', 'entertainment'],
+        'relaxation': ['parks', 'relaxation'],
+        'shopping': ['shopping'],
+        'events': ['events', 'family']
     }
     
     categories = []
     for interest in prefs.get('interests', []):
         categories.extend(interest_to_category.get(interest, []))
-    prefs['categories'] = list(set(categories)) or ['parks', 'museums', 'attractions']
+    prefs['categories'] = list(set(categories)) or ['parks', 'museums', 'attractions', 'events']
     
     try:
         # Use the same recommendation engine with fallback chain
         items, sources = get_recommendations(user_id, prefs)
         
+        elapsed_ms = int((_time.time() - _request_start) * 1000)
         response_data = {
             "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
             "generated_at": datetime.now().isoformat(),
             "ai_powered": True,
             "sources": sources,
             "items": items,
-            "from_cache": 'cache' in sources
+            "from_cache": 'cache' in sources,
+            "response_time_ms": elapsed_ms
         }
         
-        print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)}")
-        return jsonify(response_data)
+        print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)} in {elapsed_ms}ms")
+        resp = jsonify(response_data)
+        resp.headers['X-Response-Time'] = f"{elapsed_ms}ms"
+        return resp
         
     except Exception as e:
         print(f"[AI] Error in AI recommendations: {e}")
@@ -1478,306 +1987,6 @@ def get_ai_recommendations():
             "sources": ['error'],
             "items": []
         }), 500
-
-
-def generate_recommendations_from_google_places(profile, user_id=None):
-    """Generate recommendations using Google Places API.
-    User location (ZIP/address) is resolved to lat/lng so distance and travel_time match."""
-    
-    raw_location = profile.get('location', {})
-    user_lat, user_lng = resolve_user_location(raw_location)
-    location = {'lat': user_lat, 'lng': user_lng}
-    interests = profile.get('interests', [])
-    travel_times = profile.get('travel_time_ranges', ['15-30'])
-    kid_friendly = profile.get('kid_friendly', False)
-    budget = profile.get('budget', 'moderate')
-    
-    # Get visited places for deduplication
-    visited_place_ids = set()
-    if user_id:
-        visited = db.get_visited_list(user_id)
-        visited_place_ids = {v['place_id'] for v in visited}
-    
-    # Map interests to Google Places categories
-    interest_to_category = {
-        'nature': 'parks',
-        'arts_culture': 'museums',
-        'food_drinks': 'food',
-        'adventure': 'attractions',
-        'learning': 'museums',
-        'entertainment': 'entertainment',
-        'relaxation': 'parks',
-        'shopping': 'shopping',
-        'events': 'attractions'
-    }
-    
-    categories = list(set([interest_to_category.get(i, 'attractions') for i in interests]))
-    if not categories:
-        categories = ['parks', 'museums', 'food']
-    
-    # Use shared helpers so travel time and distance are aligned
-    max_travel = get_max_travel_time(travel_times)
-    max_radius_miles = get_max_radius_miles(travel_times)
-    # Convert to meters for Places API (1 mile ≈ 1609 m)
-    radius_meters = min(int(max_radius_miles * 1609), 50000)  # Max 50km
-    
-    all_places = []
-    
-    # Search for each category
-    for category in categories[:3]:  # Limit to 3 categories
-        places = search_google_places(location, category, radius_meters)
-        if places:
-            for place in places[:5]:  # Top 5 per category
-                item = convert_google_place_to_item(place, location, len(all_places))
-                
-                # Apply filters
-                if kid_friendly and not item.get('kid_friendly'):
-                    continue
-                
-                # Budget filter
-                if budget == 'free' and item.get('price_flag') != 'free':
-                    continue
-                
-                # Travel time and distance filter (aligned with user selection)
-                if item.get('travel_time_min', 0) > max_travel or item.get('distance_miles', 0) > max_radius_miles:
-                    continue
-                
-                # Add personalized explanation
-                item['explanation'] = generate_explanation_for_google_place(item, profile)
-                
-                all_places.append(item)
-    
-    # Sort by relevance (rating + proximity)
-    all_places.sort(key=lambda x: (x.get('rating', 0) * 2 - x.get('distance_miles', 10) * 0.1), reverse=True)
-    
-    return all_places[:5]  # Return top 5
-
-
-def generate_explanation_for_google_place(place, profile):
-    """Generate a personalized explanation for a Google Place"""
-    
-    group_type = profile.get('group_type', 'solo')
-    
-    group_phrases = {
-        'solo': "Perfect for solo exploration",
-        'couple': "Great spot for a date",
-        'family': "Family-friendly destination",
-        'friends': "Fun place to hang out"
-    }
-    
-    parts = [group_phrases.get(group_type, "Recommended for you")]
-    
-    rating = place.get('rating', 0)
-    if rating >= 4.5:
-        parts.append(f"★ {rating} highly rated")
-    elif rating >= 4.0:
-        parts.append(f"★ {rating} well reviewed")
-    
-    distance = place.get('distance_miles', 0)
-    if distance <= 5:
-        parts.append(f"just {place.get('travel_time_min', 10)} min away")
-    else:
-        parts.append(f"{int(distance)} miles away")
-    
-    if place.get('price_flag') == 'free':
-        parts.append("and it's free!")
-    
-    return " — ".join(parts)
-
-
-def generate_personalized_recommendations(profile, user_id=None):
-    """Generate recommendations based on user profile. Distance and travel_time
-    are computed from the user's saved location (ZIP/address) so they match."""
-    
-    location = profile.get('location', {})
-    user_lat, user_lng = resolve_user_location(location)
-    
-    group_type = profile.get('group_type', 'solo')
-    interests = profile.get('interests', [])
-    energy_level = profile.get('energy_level', 'moderate')
-    budget = profile.get('budget', 'moderate')
-    travel_times = profile.get('travel_time_ranges', ['15-30'])
-    kid_friendly = profile.get('kid_friendly', False)
-    avoid = profile.get('avoid', [])
-    
-    visited_place_ids = set()
-    if user_id:
-        visited = db.get_visited_list(user_id)
-        visited_place_ids = {v['place_id'] for v in visited}
-    
-    interest_to_category = {
-        'nature': 'parks',
-        'arts_culture': 'museums',
-        'food_drinks': 'food',
-        'adventure': 'attractions',
-        'learning': 'museums',
-        'entertainment': 'attractions',
-        'relaxation': 'parks',
-        'shopping': 'attractions',
-        'events': 'events'
-    }
-    
-    target_categories = list(set([interest_to_category.get(i, 'attractions') for i in interests]))
-    if not target_categories:
-        target_categories = ['parks', 'museums', 'attractions']
-    
-    max_travel = get_max_travel_time(travel_times)
-    max_radius_miles = get_max_radius_miles(travel_times)
-    
-    budget_filters = {
-        'free': ['free'],
-        'low': ['free', '$'],
-        'moderate': ['free', '$', '$$'],
-        'any': ['free', '$', '$$', '$$$', '$$$$', 'paid']
-    }
-    allowed_prices = budget_filters.get(budget, ['free', '$', '$$', '$$$'])
-    
-    # Filter places: compute distance/time from user location for each place
-    filtered_places = []
-    for place in MOCK_PLACES:
-        if place['place_id'] in visited_place_ids:
-            continue
-        if place['category'] not in target_categories:
-            continue
-        
-        place = _place_with_distance_from_user(place, user_lat, user_lng)
-        
-        if place.get('distance_miles', 0) > max_radius_miles:
-            continue
-        if place['travel_time_min'] > max_travel:
-            continue
-        if place['price_flag'] not in allowed_prices:
-            continue
-        if kid_friendly and not place.get('kid_friendly', False):
-            continue
-        if 'crowds' in avoid and place.get('crowded', False):
-            continue
-        
-        filtered_places.append(place)
-    
-    def relevance_score(p):
-        score = 0
-        if p['category'] in [interest_to_category.get(i) for i in interests]:
-            score += 10
-        score -= p['travel_time_min'] / 10
-        score += p.get('rating', 4) * 2
-        return score
-    
-    filtered_places.sort(key=relevance_score, reverse=True)
-    
-    top_places = filtered_places[:5]
-    
-    if len(top_places) < 5:
-        top_ids = {p['place_id'] for p in top_places}
-        for place in MOCK_PLACES:
-            if place['place_id'] in visited_place_ids or place['place_id'] in top_ids:
-                continue
-            place = _place_with_distance_from_user(place, user_lat, user_lng)
-            if place.get('distance_miles', 0) > max_radius_miles or place['travel_time_min'] > max_travel:
-                continue
-            top_places.append(place)
-            top_ids.add(place['place_id'])
-            if len(top_places) >= 5:
-                break
-    
-    # Generate personalized explanations
-    items = []
-    now = datetime.now()
-    week = f"{now.year}-{now.isocalendar()[1]:02d}"
-    
-    for i, place in enumerate(top_places):
-        explanation = generate_explanation(place, profile, interests)
-        
-        # Use Google Maps URL from mock data, or build from coordinates
-        google_maps_url = place.get('google_maps_url') or f"https://www.google.com/maps/search/?api=1&query={place['lat']},{place['lng']}"
-        
-        items.append({
-            "rec_id": f"ai_{week}_{i}",
-            "type": "place",
-            "place_id": place['place_id'],
-            "title": place['name'],
-            "category": place['category'],
-            "distance_miles": place['distance_miles'],
-            "travel_time_min": place['travel_time_min'],
-            "price_flag": place['price_flag'],
-            "kid_friendly": place.get('kid_friendly', False),
-            "indoor_outdoor": place.get('indoor_outdoor', 'outdoor'),
-            "explanation": explanation,
-            "source_url": google_maps_url,
-            "google_maps_url": google_maps_url,
-            "address": place['address'],
-            "rating": place.get('rating', 4.0),
-            "total_ratings": place.get('total_ratings', 0),
-            "photo_url": place.get('photo_url'),
-            "ai_matched": True
-        })
-    
-    return items
-
-
-def generate_explanation(place, profile, interests):
-    """Generate a personalized explanation for why this place is recommended"""
-    
-    group_type = profile.get('group_type', 'solo')
-    energy_level = profile.get('energy_level', 'moderate')
-    
-    # Group-specific language
-    group_phrases = {
-        'solo': "Perfect for a solo adventure",
-        'couple': "Great for a romantic outing",
-        'family': "Fun for the whole family",
-        'friends': "Awesome spot to hang with friends"
-    }
-    
-    # Energy-specific language
-    energy_phrases = {
-        'relaxing': "relaxed atmosphere",
-        'moderate': "nice mix of exploration and downtime",
-        'active': "plenty of activities to keep you moving"
-    }
-    
-    # Category-specific benefits
-    category_benefits = {
-        'parks': "enjoy nature and fresh air",
-        'museums': "discover something new and interesting",
-        'food': "treat yourself to great food",
-        'attractions': "have an exciting experience",
-        'events': "join a fun local event"
-    }
-    
-    # Build explanation
-    parts = []
-    
-    # Group phrase
-    if group_type in group_phrases:
-        parts.append(group_phrases[group_type])
-    
-    # Travel time
-    if place['travel_time_min'] <= 15:
-        parts.append(f"just {place['travel_time_min']} minutes away")
-    else:
-        parts.append(f"only {place['travel_time_min']} min drive")
-    
-    # Category benefit
-    cat = place['category']
-    if cat in category_benefits:
-        parts.append(category_benefits[cat])
-    
-    # Price mention
-    if place['price_flag'] == 'free':
-        parts.append("and it's free!")
-    
-    # Kid-friendly mention
-    if place.get('kid_friendly') and group_type == 'family':
-        parts.append("Kids will love it!")
-    
-    # Join parts
-    if len(parts) >= 3:
-        return f"{parts[0]} — {parts[1]}, {parts[2]}"
-    elif len(parts) == 2:
-        return f"{parts[0]} — {parts[1]}"
-    else:
-        return f"Recommended based on your preferences"
 
 
 @app.route('/v1/feedback', methods=['POST'])
@@ -1800,6 +2009,26 @@ def submit_feedback():
                 place_id = rec['place_id']
                 break
     
+    # Handle thumbs up/down feedback
+    if action in ("thumbs_up", "thumbs_down") and place_id:
+        # Get category from the recommendation item
+        category = data.get('category')
+        if not category:
+            # Try to find from current digest
+            for rec in db.get_recent_recommendations_list(user_id):
+                if rec['rec_id'] == rec_id:
+                    category = _get_category_for_place(user_id, rec['place_id'])
+                    break
+        db.add_feedback(user_id, place_id, action, rec_id=rec_id, category=category)
+        print(f"[FEEDBACK] User {user_id} gave {action} to {place_id} (category: {category})")
+        return jsonify({"status": "recorded", "action": action})
+
+    # Handle remove thumbs feedback
+    if action == "remove_feedback" and place_id:
+        db.remove_feedback(user_id, place_id)
+        print(f"[FEEDBACK] User {user_id} removed feedback for {place_id}")
+        return jsonify({"status": "recorded", "action": action})
+
     # Handle "already_been" action - add to visited list
     if action == "already_been" and place_id:
         if not db.visited_contains(user_id, place_id):
@@ -1823,6 +2052,82 @@ def submit_feedback():
         print(f"[FEEDBACK] User {user_id} unsaved {place_id}")
     
     return jsonify({"status": "recorded", "action": action})
+
+
+@app.route('/v1/track/click', methods=['POST'])
+@require_auth
+def track_click():
+    """Track when user clicks on a recommendation card"""
+    user_id = get_user_id()
+    data = request.json
+    place_id = data.get('place_id')
+    rec_id = data.get('rec_id')
+    
+    if not place_id:
+        return jsonify({"error": "Missing place_id"}), 400
+    
+    category = _get_category_for_place(user_id, place_id)
+    
+    # Store click in database using the existing db function
+    db.add_click(user_id, place_id, rec_id=rec_id, category=category)
+    
+    print(f"[CLICK_TRACKING] User {user_id} clicked on {place_id} (category: {category})")
+    
+    return jsonify({"status": "tracked"})
+
+
+@app.route('/v1/user/affinity', methods=['GET'])
+@require_auth
+def get_user_affinity():
+    """Get user's learned category preferences/affinities"""
+    user_id = get_user_id()
+    
+    # Get affinity scores
+    affinity_scores = get_user_affinity_scores(user_id)
+    
+    # Get supporting data
+    saved_count = len(db.get_saved_list(user_id))
+    visited_count = len(db.get_visited_list(user_id))
+    feedback_counts = db.get_click_counts_by_category(user_id) if hasattr(db, 'get_click_counts_by_category') else {}
+    
+    # Format response
+    preferences = []
+    for category, score in affinity_scores.items():
+        if score != 0.0:  # Only show categories with some signal
+            preferences.append({
+                "category": category,
+                "score": round(score, 2),
+                "level": "strong" if abs(score) > 0.4 else "moderate" if abs(score) > 0.1 else "weak",
+                "sentiment": "positive" if score > 0 else "negative" if score < 0 else "neutral"
+            })
+    
+    # Sort by absolute score (strongest preferences first)
+    preferences.sort(key=lambda x: abs(x['score']), reverse=True)
+    
+    return jsonify({
+        "user_id": user_id,
+        "preferences": preferences,
+        "stats": {
+            "saved_places": saved_count,
+            "visited_places": visited_count,
+            "interactions": saved_count + visited_count + sum(feedback_counts.values())
+        }
+    })
+
+
+@app.route('/v1/user/affinity/reset', methods=['POST'])
+@require_auth
+def reset_user_affinity():
+    """Reset user's learned preferences (clear interaction history)"""
+    user_id = get_user_id()
+    
+    # Clear the affinity cache
+    db.invalidate_affinity_cache(user_id)
+    
+    print(f"[AFFINITY] Reset affinity scores for user {user_id}")
+    
+    return jsonify({"status": "reset", "message": "Your learned preferences have been reset"})
+
 
 # ========== VISITED HISTORY ==========
 
@@ -3078,10 +3383,114 @@ def api_status():
     return jsonify(status)
 
 
+@app.route('/v1/profile/interests', methods=['GET'])
+@require_auth
+def get_interest_profile():
+    """Get learned user interest profile (affinity scores)."""
+    user_id = get_user_id()
+    affinity = get_user_affinity_scores(user_id)
+
+    # Get raw signal counts for transparency
+    saved_count = len(db.get_saved_list(user_id))
+    visited_count = len(db.get_visited_list(user_id))
+    feedback = db.get_all_feedback(user_id)
+    thumbs_up_count = sum(1 for f in feedback if f['feedback_type'] == 'thumbs_up')
+    thumbs_down_count = sum(1 for f in feedback if f['feedback_type'] == 'thumbs_down')
+    click_counts = db.get_click_counts_by_category(user_id)
+    total_clicks = sum(click_counts.values())
+
+    return jsonify({
+        "affinity_scores": affinity,
+        "signals": {
+            "saved": saved_count,
+            "visited": visited_count,
+            "thumbs_up": thumbs_up_count,
+            "thumbs_down": thumbs_down_count,
+            "clicks": total_clicks,
+            "clicks_by_category": click_counts
+        }
+    })
+
+
+@app.route('/v1/profile/interests/reset', methods=['POST'])
+@require_auth
+def reset_interest_profile():
+    """Reset user's learned preferences."""
+    user_id = get_user_id()
+    db.invalidate_affinity_cache(user_id)
+    # Optionally clear all feedback
+    clear_feedback = (request.json or {}).get('clear_feedback', False)
+    if clear_feedback:
+        with db.get_conn() as c:
+            c.execute("DELETE FROM feedback WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM click_tracking WHERE user_id = ?", (user_id,))
+    return jsonify({"status": "reset"})
+
+
+@app.route('/v1/feedback/status', methods=['GET'])
+@require_auth
+def get_feedback_status():
+    """Get feedback status for all items in current digest (for UI state)."""
+    user_id = get_user_id()
+    feedback = db.get_all_feedback(user_id)
+    result = {f['place_id']: f['feedback_type'] for f in feedback}
+    return jsonify({"feedback": result})
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({"status": "ok", "service": "activity-planner-api"})
+
+def _warm_cache_on_startup():
+    """Pre-fetch recommendations for known users on startup (background thread)."""
+    import threading
+    import time
+    
+    def _do_warm():
+        time.sleep(2)  # Let the server start first
+        try:
+            users_with_prefs = db.get_all_users_with_preferences()
+            # Always include demo user with default prefs for guests
+            demo_prefs = {
+                'home_location': {'type': 'city', 'value': 'San Francisco, CA'},
+                'categories': ['parks', 'museums', 'attractions'],
+                'kid_friendly': True,
+                'travel_time_ranges': ['15-30'],
+            }
+            users_with_prefs.append({'id': 'demo_user', 'preferences': demo_prefs})
+            
+            for user in users_with_prefs[:3]:  # Warm top 3 users max
+                user_id = user.get('id', 'demo_user')
+                prefs = user.get('preferences', {})
+                if not prefs:
+                    continue
+                cache_key = _get_warm_cache_key(user_id, prefs)
+                if cache_key in _warm_cache:
+                    continue
+                print(f"[WARM_CACHE] Pre-warming for user {user_id}...")
+                try:
+                    items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
+                    if items:
+                        _warm_cache[cache_key] = {
+                            'items': items,
+                            'sources': sources,
+                            'timestamp': datetime.now()
+                        }
+                        print(f"[WARM_CACHE] Warmed {len(items)} items for {user_id}")
+                except Exception as e:
+                    print(f"[WARM_CACHE] Error warming for {user_id}: {e}")
+        except Exception as e:
+            print(f"[WARM_CACHE] Startup warming error: {e}")
+    
+    t = threading.Thread(target=_do_warm, daemon=True)
+    t.start()
+    print("[WARM_CACHE] Background cache warming started")
+
+
+# Warm cache on startup (non-blocking)
+_warm_cache_on_startup()
+
 
 if __name__ == '__main__':
     print("=" * 50)

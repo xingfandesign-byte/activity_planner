@@ -3,11 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Activities">
+    <meta name="description" content="Personalized local activity recommendations">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icons/icon-192.svg">
     <title>Activity Planner</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=3">
 </head>
 <body>
-    <div id="app">
+    <a href="#dashboard-digest-items" class="skip-link">Skip to recommendations</a>
+    <div id="app" role="application">
         <!-- Loading State (shown until JS decides which screen) -->
         <div id="app-loading" class="app-loading">
             <div class="loading-content">
@@ -15,7 +23,7 @@
                 <p>Loading Activity Planner...</p>
             </div>
         </div>
-        
+
         <!-- Auth Screen (Login/Signup) - Only for returning users who need to sign in -->
         <div id="auth-screen" class="screen">
             <div class="container auth-container">
@@ -24,12 +32,12 @@
                 <div id="login-form" class="auth-form active">
                 <h1>🎉 Activity Planner</h1>
                     <p class="subtitle">Welcome back!</p>
-                
+
                     <div class="form-group">
                         <label>Email</label>
                         <input type="email" id="login-email" placeholder="hello@example.com">
                     </div>
-                    
+
                     <div class="form-group">
                         <label>Password</label>
                         <div class="password-input-wrapper">
@@ -40,43 +48,43 @@
                             </button>
                         </div>
                     </div>
-                    
+
                     <div class="checkbox-row">
                         <label><input type="checkbox" id="remember-me"> Remember me</label>
                         <a href="#" onclick="showForgotPassword()" class="forgot-link">Forgot password?</a>
                     </div>
-                    
+
                     <button class="btn btn-primary" onclick="handleLogin()">Sign In</button>
-                    
+
                     <div class="auth-divider">
                         <span>or sign in with</span>
                     </div>
-                    
+
                     <div class="oauth-buttons">
                         <button class="btn btn-oauth" onclick="signInWithOAuth('google')">
                             <span class="oauth-icon">G</span> Google
                         </button>
                     </div>
-                    
+
                     <p class="auth-switch">
                         Don't have an account? <a href="#" onclick="showSignupForm()">Sign up</a>
                     </p>
-                    
+
                     <p class="auth-switch">
                         <a href="#" onclick="continueAsGuest()">Continue as guest</a>
                     </p>
                 </div>
-                
+
                 <!-- Signup Form -->
                 <div id="signup-form" class="auth-form">
                     <h1>🎉 Activity Planner</h1>
                     <p class="subtitle">Get personalized activity ideas</p>
-                    
+
                     <div class="form-group">
                         <label>Email address</label>
                         <input type="email" id="signup-email" placeholder="hello@example.com">
                     </div>
-                    
+
                     <div class="form-group">
                         <label>Create a password</label>
                         <div class="password-input-wrapper">
@@ -88,32 +96,32 @@
                         </div>
                         <p class="input-hint">✓ At least 8 characters</p>
                     </div>
-                    
+
                     <div class="checkbox-row">
                         <label><input type="checkbox" id="email-digest-optin" checked> Send me weekly digest emails</label>
                     </div>
-                    
+
                     <button class="btn btn-primary" onclick="handleSignup()">Create Account</button>
-                    
+
                     <div class="auth-divider">
                         <span>or continue with</span>
                     </div>
-                    
+
                     <div class="oauth-buttons">
                         <button class="btn btn-oauth" onclick="signInWithOAuth('google')">
                             <span class="oauth-icon">G</span> Google
                         </button>
                     </div>
-                    
+
                     <p class="auth-switch">
                         Already have an account? <a href="#" onclick="showLoginForm()">Sign in</a>
                     </p>
-                    
+
                     <p class="terms-text">
                         By continuing, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
                     </p>
                 </div>
-                
+
                 <!-- Reset Password Form (shown when URL has ?reset_token=...) -->
                 <div id="reset-password-form" class="auth-form">
                     <h1>Set new password</h1>
@@ -190,7 +198,7 @@
                 <div id="step-1" class="onboarding-step active" style="display: block;">
                     <h2>Who are you planning activities for?</h2>
                     <p class="subtitle">This helps us personalize your recommendations</p>
-                    
+
                     <div class="selection-grid">
                         <div class="selection-card" data-value="solo">
                             <div class="card-emoji">👤</div>
@@ -216,19 +224,19 @@
                     <div id="step-2a" class="substep active" style="display: block;">
                         <h2>Where are you based?</h2>
                         <p class="subtitle">We'll use this to calculate travel times</p>
-                        
+
                         <button id="use-location-btn" class="btn btn-location">
                             <span class="btn-icon">📍</span>
                             <span class="btn-text">Use My Current Location</span>
                             <span class="btn-subtext">For accurate travel times</span>
                         </button>
-                        
+
                         <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
                     </div>
-                    
+
                     <div id="step-2b" class="substep">
                         <h2>How would you like to enter your location?</h2>
-                        
+
                         <div class="selection-grid two-col">
                             <div class="selection-card" data-value="zip" id="select-zip">
                                 <div class="card-emoji">🏠</div>
@@ -241,14 +249,14 @@
                                 <div class="card-sublabel">(exact times)</div>
                             </div>
                         </div>
-                        
+
                         <div id="zip-input-group" class="input-group hidden">
                             <label>Enter your ZIP code:</label>
                             <input type="text" id="zip-input" placeholder="94102" maxlength="10">
                             <p class="privacy-note">🔒 We only use this for travel times</p>
                             <button class="btn btn-primary" onclick="submitLocation('zip')">Continue →</button>
                         </div>
-                        
+
                         <div id="address-input-group" class="input-group hidden">
                             <label>Enter your address:</label>
                             <input type="text" id="address-input" placeholder="123 Main St, San Francisco, CA">
@@ -256,22 +264,22 @@
                             <button class="btn btn-primary" onclick="submitLocation('address')">Continue →</button>
                         </div>
                     </div>
-                    
+
                     <div id="step-2c" class="substep">
                         <h2>✓ Location set!</h2>
                         <p class="location-display" id="location-display">📍 San Francisco, CA 94102</p>
-                        
+
                         <label class="save-location-option">
                             <input type="checkbox" id="save-location-checkbox" onchange="handleSaveLocationCheckbox(this)">
                             <span>Save as my home location</span>
                         </label>
-                        
+
                         <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
                     </div>
-                    
+
                     <div id="step-2d" class="substep">
                         <h2>Travel Preferences</h2>
-                        
+
                         <div class="form-section">
                             <label>How do you get around? (select all)</label>
                             <div class="selection-grid three-col">
@@ -289,7 +297,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="form-section">
                             <label>Typical departure times (select all)</label>
                             <p class="section-sublabel">Saturday:</p>
@@ -323,7 +331,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="form-section">
                             <label>Max travel time (select all that apply)</label>
                             <div class="selection-grid four-col">
@@ -345,7 +353,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
                     </div>
                 </div>
@@ -354,7 +362,7 @@
                 <div id="step-3" class="onboarding-step">
                     <h2>What do you enjoy?</h2>
                     <p class="subtitle">Pick at least 3</p>
-                    
+
                     <div class="selection-grid three-col" id="interests-grid">
                         <div class="selection-card selectable" data-value="nature">
                             <div class="card-emoji">🌲🏕️</div>
@@ -393,16 +401,16 @@
                             <div class="card-label">Local Events</div>
                         </div>
                     </div>
-                    
+
                     <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
-                    
+
                     <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
                 </div>
 
                 <!-- Step 4: Activity Style -->
                 <div id="step-4" class="onboarding-step">
                     <h2>What's your ideal activity vibe?</h2>
-                    
+
                     <div class="form-section">
                         <label>Energy Level:</label>
                         <div class="selection-grid three-col">
@@ -423,7 +431,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="form-section">
                         <label>How much time per activity?</label>
                         <div class="selection-grid three-col">
@@ -441,7 +449,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
                 </div>
 
@@ -449,7 +457,7 @@
                 <div id="step-5" class="onboarding-step">
                     <h2>A few more details</h2>
                     <p class="subtitle">Optional - you can skip this</p>
-                    
+
                     <div class="form-section">
                         <label>Budget per outing:</label>
                         <div class="selection-grid four-col">
@@ -471,7 +479,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="form-section">
                         <label>Accessibility needs:</label>
                         <div class="checkbox-group">
@@ -480,7 +488,7 @@
                             <label><input type="checkbox" name="accessibility" value="limited_walking"> Limited walking</label>
                         </div>
                     </div>
-                    
+
                     <div class="form-section">
                         <label>Prefer to avoid:</label>
                         <div class="checkbox-group">
@@ -490,13 +498,13 @@
                             <label><input type="checkbox" name="avoid" value="waits"> Long wait times</label>
                         </div>
                     </div>
-                    
+
                     <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
                 </div>
-                
+
                 <!-- Sign in / Sign up link for existing users -->
                 <p class="onboarding-auth-link">
-                    Already have an account? <a href="#" onclick="showAuthFromOnboarding('login')">Sign in</a> · 
+                    Already have an account? <a href="#" onclick="showAuthFromOnboarding('login')">Sign in</a> ·
                     Want to register? <a href="#" onclick="showAuthFromOnboarding('signup')">Sign up</a>
                 </p>
             </div>
@@ -512,17 +520,17 @@
                         <button id="signout-btn" class="btn btn-secondary" onclick="handleSignOut()">Sign Out</button>
                     </div>
                 </header>
-                
+
                 <div class="welcome-banner">
                     <h2>Welcome back, <span id="user-name">there</span>! 👋</h2>
                     <p>Here's what's happening near you.</p>
                 </div>
-                
+
                 <!-- Quick Adjustments - Now at the top -->
                 <div class="quick-adjustments">
                     <h3>Quick Adjustments</h3>
                     <p class="quick-adjustments-note">These are temporary - your saved preferences won't change</p>
-                    
+
                     <div class="quick-row">
                         <div class="form-group">
                             <label>Location</label>
@@ -532,7 +540,7 @@
                                 <option value="custom">✏️ Enter new location...</option>
                             </select>
                         </div>
-                        
+
                         <div class="form-group">
                             <label>Planning for</label>
                             <div class="quick-toggle-group">
@@ -543,7 +551,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label>Max travel time</label>
                         <div class="quick-toggle-group travel-time-toggles">
@@ -554,34 +562,35 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Recommendations Section -->
                 <div class="dashboard-recommendations">
                     <div class="section-header">
-                        <h3>🎉 Recommended Activities</h3>
-                        <button class="btn-link" onclick="refreshRecommendations()"><span class="refresh-icon">↻</span> Refresh</button>
+                        <h3 id="recommendations-heading">🎉 Recommended Activities</h3>
+                        <button class="btn-link" onclick="refreshRecommendations()" aria-label="Refresh recommendations"><span class="refresh-icon" aria-hidden="true">↻</span> Refresh</button>
                     </div>
-                    <div id="dashboard-digest-items" class="digest-grid">
+                    <div id="dashboard-digest-items" class="digest-grid" role="region" aria-labelledby="recommendations-heading" aria-live="polite">
                         <div class="loading" id="dashboard-loading">Loading recommendations...</div>
                     </div>
                 </div>
             </div>
         </div>
-        
+
         <!-- Settings Modal -->
-        <div id="settings-modal" class="modal">
+        <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-label="Settings">
             <div class="modal-content modal-large">
-                <span class="close" onclick="closeSettings()">&times;</span>
+                <span class="close" onclick="closeSettings()" role="button" aria-label="Close settings" tabindex="0">&times;</span>
                 <h2>Settings</h2>
-                
+
                 <div class="settings-tabs">
                     <button class="settings-tab active" onclick="showSettingsTab('preferences')">Preferences</button>
                     <button class="settings-tab" onclick="showSettingsTab('saved')">Saved</button>
                     <button class="settings-tab" onclick="showSettingsTab('been')">Been</button>
+                    <button class="settings-tab" onclick="showSettingsTab('interests')">Interests</button>
                     <button class="settings-tab" onclick="showSettingsTab('account')">Account</button>
                     <button class="settings-tab" onclick="showSettingsTab('notifications')">Notifications</button>
                 </div>
-                
+
                 <!-- Preferences Tab -->
                 <div id="settings-preferences" class="settings-tab-content active">
                     <div class="preferences-summary">
@@ -597,7 +606,7 @@
                                 <p class="pref-sublabel">Used as default starting point</p>
                             </div>
                         </div>
-                        
+
                         <!-- Planning For -->
                         <div class="pref-card">
                             <div class="pref-card-header">
@@ -609,7 +618,7 @@
                                 <p id="pref-group">Family with Kids</p>
                             </div>
                         </div>
-                        
+
                         <!-- Travel Preferences -->
                         <div class="pref-card">
                             <div class="pref-card-header">
@@ -623,7 +632,7 @@
                                 <p><strong>Departure:</strong> <span id="pref-departure">Saturday morning, Sunday morning</span></p>
                             </div>
                         </div>
-                        
+
                         <!-- Interests -->
                         <div class="pref-card">
                             <div class="pref-card-header">
@@ -639,7 +648,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <!-- Ideal Vibe -->
                         <div class="pref-card">
                             <div class="pref-card-header">
@@ -653,7 +662,7 @@
                                 <p><strong>Budget:</strong> <span id="pref-budget">Under $50 per person</span></p>
                             </div>
                         </div>
-                        
+
                         <!-- Other Preferences -->
                         <div class="pref-card">
                             <div class="pref-card-header">
@@ -668,10 +677,10 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <button class="btn btn-secondary" onclick="editAllPreferences()">Redo Full Onboarding</button>
                 </div>
-                
+
                 <!-- Saved Places Tab -->
                 <div id="settings-saved" class="settings-tab-content">
                     <div class="list-header">
@@ -687,7 +696,7 @@
                         <p class="empty-hint">Tap the star on any recommendation to save it here</p>
                     </div>
                 </div>
-                
+
                 <!-- Been Places Tab -->
                 <div id="settings-been" class="settings-tab-content">
                     <div class="list-header">
@@ -703,6 +712,45 @@
                         <p class="empty-hint">Mark places you've already been to exclude them from recommendations</p>
                     </div>
                 </div>
+
+                <!-- Interests Tab -->
+                <div id="settings-interests" class="settings-tab-content">
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🧠</span>
+                            <span class="pref-title">Learned Preferences</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">These are learned from your saves, visits, likes, and clicks. They influence how recommendations are ranked for you.</p>
+                            <div id="interest-profile-content">
+                                <p style="color: #999;">Loading...</p>
+                            </div>
+                            <div style="margin-top: 1.5rem; border-top: 1px solid #e5e7eb; padding-top: 1rem;">
+                                <button class="btn btn-secondary" onclick="resetInterestProfile(false)" style="margin-right: 0.5rem;">Reset Ranking</button>
+                                <button class="btn btn-secondary" onclick="resetInterestProfile(true)" style="background: #fef2f2; color: #ef4444; border-color: #fecaca;">Reset All Data</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Interests Tab -->
+                <div id="settings-interests" class="settings-tab-content">
+                    <div class="pref-card">
+                        <div class="pref-card-header">
+                            <span class="pref-icon">🎯</span>
+                            <span class="pref-title">Your Learned Preferences</span>
+                        </div>
+                        <div class="pref-card-content">
+                            <p class="pref-sublabel">Based on your activity (saves, visits, thumbs up/down)</p>
+                            <div id="affinity-loading" class="list-loading" style="display: none;">Loading...</div>
+                            <div id="affinity-content">
+                                <div id="affinity-list" class="affinity-list"></div>
+                                <div id="affinity-stats" class="affinity-stats"></div>
+                            </div>
+                            <button class="btn btn-secondary" onclick="resetAffinityScores()">Reset All Preferences</button>
+                        </div>
+                    </div>
+                </div>
                 
                 <!-- Account Tab -->
                 <div id="settings-account" class="settings-tab-content">
@@ -716,7 +764,7 @@
                             <p><strong>Member since:</strong> <span id="account-since">January 2026</span></p>
                         </div>
                     </div>
-                    
+
                     <div class="pref-card">
                         <div class="pref-card-header">
                             <span class="pref-icon">🔒</span>
@@ -726,7 +774,7 @@
                             <button class="btn btn-secondary" onclick="changePassword()">Change Password</button>
                         </div>
                     </div>
-                    
+
                     <div class="pref-card danger">
                         <div class="pref-card-header">
                             <span class="pref-icon">⚠️</span>
@@ -738,7 +786,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- Notifications Tab -->
                 <div id="settings-notifications" class="settings-tab-content">
                     <div class="pref-card">
@@ -761,12 +809,12 @@
                             </label>
                         </div>
                     </div>
-                    
+
                     <button class="btn btn-primary" onclick="saveNotificationSettings()">Save Preferences</button>
                 </div>
             </div>
         </div>
-        
+
         <!-- Full Screen Planner (optional expanded view) -->
         <div id="planner" class="screen">
             <div class="container">
@@ -777,14 +825,14 @@
                         <button id="refresh-btn" class="btn btn-secondary" onclick="loadDigest()">↻ Refresh</button>
                     </div>
                 </header>
-                
+
                 <div id="digest-container">
                     <div class="loading" id="loading">Loading activity ideas...</div>
                     <div id="digest-items" class="digest-grid"></div>
                 </div>
             </div>
         </div>
-        
+
         <!-- Edit Preference Modal -->
         <div id="edit-modal" class="modal">
             <div class="modal-content">
@@ -797,21 +845,21 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- Recommendation Detail Modal -->
-        <div id="detail-modal" class="modal">
+        <div id="detail-modal" class="modal" role="dialog" aria-modal="true" aria-label="Activity details">
             <div class="modal-content">
-                <span class="close">&times;</span>
+                <span class="close" role="button" aria-label="Close" tabindex="0">&times;</span>
                 <div id="detail-content"></div>
             </div>
         </div>
-        
+
         <!-- Signup Prompt Modal (after onboarding) -->
         <div id="signup-prompt-modal" class="modal">
             <div class="modal-content signup-prompt">
                 <h2>🎉 You're all set!</h2>
                 <p class="prompt-subtitle">Want to save your preferences for next time?</p>
-                
+
                 <div class="prompt-benefits">
                     <div class="benefit-item">
                         <span class="benefit-icon">💾</span>
@@ -826,25 +874,30 @@
                         <span>Faster recommendations next time</span>
                     </div>
                 </div>
-                
+
                 <button class="btn btn-primary" onclick="signupFromPrompt()">Create Free Account</button>
-                
+
                 <div class="auth-divider">
                     <span>or</span>
                 </div>
-                
+
                 <button class="btn btn-oauth btn-oauth-full" onclick="signInWithOAuth('google'); closeSignupPrompt();">
                     <span class="oauth-icon">G</span> Continue with Google
                 </button>
-                
+
                 <p class="auth-switch">
-                    <a href="#" onclick="skipSignupAndContinue()">Skip for now — show me recommendations</a>
+                    <a href="#" onclick="skipSignupAndContinue()">Skip for now - show me recommendations</a>
                 </p>
             </div>
         </div>
     </div>
-    
+
     <script src="config.js"></script>
     <script src="app.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+    </script>
 </body>
 </html>
