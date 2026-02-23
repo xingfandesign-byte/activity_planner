@@ -1152,16 +1152,29 @@ def calculate_distance(lat1, lng1, lat2, lng2):
     return R * c
 
 
+_nominatim_rate_limited = False  # Skip Nominatim when rate-limited
+
 def geocode_to_lat_lng(query):
     """Resolve ZIP code or address to lat/lng using OpenStreetMap Nominatim (no API key)."""
+    global _nominatim_rate_limited
     import re
     query = (query or "").strip()
     if not query:
         return None
+    # Detect raw lat/lng coordinates (e.g. "37.7922, -122.4583")
+    coord_match = re.match(r'^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$', query)
+    if coord_match:
+        lat, lng = float(coord_match.group(1)), float(coord_match.group(2))
+        if -90 <= lat <= 90 and -180 <= lng <= 180:
+            print(f"[GEOCODE] Detected coordinates: ({lat}, {lng})")
+            geocode_cache[query.lower()] = (lat, lng)
+            return (lat, lng)
+
     cache_key = query.lower()
     if cache_key in geocode_cache:
-        print(f"[GEOCODE] Cache hit for '{query}'")
-        return geocode_cache[cache_key]
+        cached = geocode_cache[cache_key]
+        print(f"[GEOCODE] Cache hit for '{query}' -> {cached}")
+        return cached
     try:
         # Determine the search query
         if query.isdigit() and len(query) == 5:
@@ -1174,17 +1187,62 @@ def geocode_to_lat_lng(query):
         else:
             q = query
         
+        # Fast path: common Bay Area cities (avoids Nominatim entirely)
+        _KNOWN_LOCATIONS = {
+            "san francisco": (37.7749, -122.4194),
+            "san francisco, california": (37.7749, -122.4194),
+            "san francisco, ca": (37.7749, -122.4194),
+            "oakland": (37.8044, -121.9712),
+            "oakland, ca": (37.8044, -121.9712),
+            "berkeley": (37.8716, -122.2727),
+            "berkeley, ca": (37.8716, -122.2727),
+            "fremont": (37.5485, -121.9886),
+            "fremont, ca": (37.5485, -121.9886),
+            "newark": (37.5316, -122.0392),
+            "newark, ca": (37.5316, -122.0392),
+            "san jose": (37.3382, -121.8863),
+            "san jose, ca": (37.3382, -121.8863),
+            "palo alto": (37.4419, -122.1430),
+            "palo alto, ca": (37.4419, -122.1430),
+            "mountain view": (37.3861, -122.0839),
+            "mountain view, ca": (37.3861, -122.0839),
+            "sunnyvale": (37.3688, -122.0363),
+            "sunnyvale, ca": (37.3688, -122.0363),
+            "hayward": (37.6688, -122.0808),
+            "hayward, ca": (37.6688, -122.0808),
+            "union city": (37.5934, -122.0438),
+            "union city, ca": (37.5934, -122.0438),
+        }
+        known_key = cache_key.replace(", usa", "").replace(",usa", "").strip()
+        if known_key in _KNOWN_LOCATIONS:
+            result = _KNOWN_LOCATIONS[known_key]
+            geocode_cache[cache_key] = result
+            print(f"[GEOCODE] Known location: '{query}' -> {result}")
+            return result
+
+        if _nominatim_rate_limited:
+            print(f"[GEOCODE] Skipping Nominatim (rate-limited) for '{q}'")
+            geocode_cache[cache_key] = None
+            return None
+
         print(f"[GEOCODE] Searching for: '{q}'")
         url = "https://nominatim.openstreetmap.org/search"
-        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=10)
+        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=4)
         
+        if r.status_code == 429:
+            print(f"[GEOCODE] Rate limited for '{q}' - skipping Nominatim for remaining items")
+            _nominatim_rate_limited = True
+            geocode_cache[cache_key] = None
+            return None
         if r.status_code != 200:
             print(f"[GEOCODE] HTTP {r.status_code} for '{q}'")
+            geocode_cache[cache_key] = None
             return None
         
         data = r.json()
         if not data:
             print(f"[GEOCODE] No results for '{q}'")
+            geocode_cache[cache_key] = None
             return None
         
         lat = float(data[0]["lat"])

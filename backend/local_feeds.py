@@ -202,7 +202,7 @@ def profile_to_prompt(profile):
     )
 
 
-def _fetch_url(url, timeout=10, headers=None):
+def _fetch_url(url, timeout=4, headers=None):
     """Fetch URL and return bytes or None."""
     headers = headers or {}
     if "User-Agent" not in headers:
@@ -303,7 +303,7 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
     return items
 
 
-def fetch_rss_feed(feed_url, source_label=None, timeout=10):
+def fetch_rss_feed(feed_url, source_label=None, timeout=4):
     """
     Fetch a single RSS or Atom feed and return normalized items.
     source_label: optional name (e.g. "Axios Local", "Facebook Local") for display.
@@ -316,7 +316,7 @@ def fetch_rss_feed(feed_url, source_label=None, timeout=10):
     return _parse_rss_or_atom(raw, feed_url, label)
 
 
-def fetch_all_rss_feeds(feed_configs, timeout=10):
+def fetch_all_rss_feeds(feed_configs, timeout=4):
     """
     feed_configs: list of dicts { "url": "...", "label": "Axios Local" } or list of URL strings.
     Returns list of normalized feed items from all feeds.
@@ -354,7 +354,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
             "access_token": access_token,
             "limit": 20,
         }
-        r = requests.get(search_url, params=params, timeout=10)
+        r = requests.get(search_url, params=params, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Facebook search error: {r.status_code}")
             return []
@@ -375,7 +375,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
                 "access_token": access_token,
                 "limit": 5,
             }
-            er = requests.get(events_url, params=ep, timeout=8)
+            er = requests.get(events_url, params=ep, timeout=4)
             if er.status_code != 200:
                 continue
             ed = er.json()
@@ -413,7 +413,7 @@ def fetch_eventbrite_events(lat, lng, radius_km, token, limit=10):
             "expand": "venue",
         }
         headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Eventbrite error: {r.status_code}")
             return []
@@ -464,7 +464,7 @@ def fetch_luma_events(lat, lng, radius_miles=25, limit=10):
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 "Accept": "text/html,application/xhtml+xml",
             }
-            r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+            r = requests.get(url, headers=headers, timeout=4, allow_redirects=True)
             if r.status_code != 200:
                 continue
             
@@ -580,7 +580,7 @@ def fetch_meetup_events(lat, lng, radius_miles=25, categories=None, limit=10):
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
         }
         
-        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=10)
+        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Meetup GraphQL error: {r.status_code}")
             return _scrape_meetup_events(lat, lng, limit)
@@ -619,7 +619,7 @@ def _scrape_meetup_events(lat, lng, limit=10):
     try:
         url = f"https://www.meetup.com/find/?location={lat}%2C{lng}&source=EVENTS"
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers, timeout=4)
         if r.status_code != 200:
             return []
         items = []
@@ -663,7 +663,7 @@ def fetch_510families_events(limit=15):
     try:
         # Use requests library to handle SSL properly
         headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
-        r = requests.get(FAMILIES_510_RSS, headers=headers, timeout=10, verify=True)
+        r = requests.get(FAMILIES_510_RSS, headers=headers, timeout=4, verify=True)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] 510families RSS error: {r.status_code}")
             return []
@@ -1193,7 +1193,7 @@ def fetch_yelp_places(user_lat, user_lng, radius_miles=25, categories=None, limi
             "sort_by": "best_match",
             "limit": min(limit, 50),
         }
-        r = requests.get(url, headers=headers, params=params, timeout=8)
+        r = requests.get(url, headers=headers, params=params, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Yelp error: {r.status_code}")
             return []
@@ -1259,7 +1259,7 @@ def fetch_ticketmaster_events(user_lat, user_lng, radius_miles=25, limit=15):
             "size": min(limit, 50),
             "sort": "date,asc",
         }
-        r = requests.get(url, params=params, timeout=8)
+        r = requests.get(url, params=params, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Ticketmaster error: {r.status_code}")
             return []
@@ -1368,7 +1368,7 @@ def fetch_osm_places(user_lat, user_lng, radius_miles=10, limit=15):
 out center {limit * 3};
 """
         url = "https://overpass-api.de/api/interpreter"
-        r = requests.post(url, data={"data": query}, timeout=10)
+        r = requests.post(url, data={"data": query}, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Overpass error: {r.status_code}")
             return []
@@ -1448,7 +1448,7 @@ def fetch_eventbrite_public(user_lat, user_lng, radius_miles=25, limit=10):
         }
         # Try a generic location-based search
         url = f"https://www.eventbrite.com/d/united-states/events/?lat={user_lat}&lng={user_lng}&radius={int(radius_miles)}mi"
-        r = requests.get(url, headers=headers, timeout=8, allow_redirects=True)
+        r = requests.get(url, headers=headers, timeout=4, allow_redirects=True)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Eventbrite public: {r.status_code}")
             return []
@@ -1559,7 +1559,7 @@ def fetch_patch_events(user_lat, user_lng, limit=10):
         for _, slug in city_dists[:3]:
             rss_url = f"https://patch.com/california/{slug}/rss"
             try:
-                r = requests.get(rss_url, headers=headers, timeout=8)
+                r = requests.get(rss_url, headers=headers, timeout=4)
                 if r.status_code != 200:
                     continue
                 parsed = _parse_rss_or_atom(r.content, rss_url, f"Patch ({slug})")
@@ -1608,7 +1608,7 @@ def fetch_tripadvisor_places(user_lat, user_lng, radius_miles=25, limit=10):
             "Accept": "application/json",
             "Referer": "https://www.tripadvisor.com",
         }
-        r = requests.get(url, params=params, headers=headers, timeout=8)
+        r = requests.get(url, params=params, headers=headers, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] TripAdvisor error: {r.status_code}")
             return []
@@ -1671,7 +1671,7 @@ def fetch_alltrails_trails(user_lat, user_lng, radius_miles=25, limit=10):
             "https://developer.nps.gov/api/v1/parks",
             params={"stateCode": "CA", "limit": 50, "api_key": NPS_KEY},
             headers={"User-Agent": "ActivityPlanner/1.0"},
-            timeout=8,
+            timeout=4,
         )
         if r.status_code == 200:
             from math import radians, sin, cos, sqrt, atan2
@@ -1731,7 +1731,7 @@ def fetch_alltrails_trails(user_lat, user_lng, radius_miles=25, limit=10):
         r2 = requests.get(
             "https://sf.funcheap.com/feed/",
             headers={"User-Agent": "ActivityPlanner/1.0"},
-            timeout=8,
+            timeout=4,
         )
         if r2.status_code == 200:
             parsed = _parse_rss_or_atom(r2.content, "https://sf.funcheap.com/feed/", "SF Fun Cheap")
@@ -1779,7 +1779,7 @@ def fetch_parks_rec_events(user_lat, user_lng, radius_miles=25, limit=10):
 
     for source_name, feed_url in community_feeds:
         try:
-            r = requests.get(feed_url, headers=headers, timeout=8, allow_redirects=True)
+            r = requests.get(feed_url, headers=headers, timeout=4, allow_redirects=True)
             if r.status_code != 200:
                 print(f"[LOCAL_FEEDS] {source_name}: {r.status_code}")
                 continue
@@ -1904,7 +1904,7 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
         if not config.get("feed_configs"):
             return []
         try:
-            return fetch_all_rss_feeds(config["feed_configs"], timeout=6)
+            return fetch_all_rss_feeds(config["feed_configs"], timeout=4)
         except Exception as e:
             print(f"[LOCAL_FEEDS] RSS error: {e}")
             return []
@@ -1974,13 +1974,15 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
             return []
 
     # Fetch all sources in parallel (max wait = slowest source, not sum of all)
+    # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
+    # _fetch_parks_rec (dead RSS feeds), _fetch_meetup (404 API change)
     tasks = [
-        _fetch_luma, _fetch_meetup, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
+        _fetch_luma, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
         _fetch_yelp, _fetch_ticketmaster, _fetch_osm, _fetch_eventbrite_pub,
-        _fetch_patch, _fetch_tripadvisor, _fetch_alltrails, _fetch_parks_rec,
+        _fetch_tripadvisor,
     ]
-    # Early return: stop waiting after 18s so we return fast with available results.
-    FETCH_TIMEOUT = 18
+    # Early return: stop waiting after 5s so we return fast with available results.
+    FETCH_TIMEOUT = 5
     with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
         try:
