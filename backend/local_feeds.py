@@ -26,15 +26,13 @@ EVENTBRITE_API = "https://www.eventbriteapi.com/v3"
 MEETUP_API = "https://api.meetup.com"
 # Optional: Luma API
 LUMA_API = "https://api.lu.ma/public/v1"
-# Optional: Manus AI agent for personalized local feed
-MANUS_API_BASE = "https://api.manus.ai/v1"
-
 # 510families.com RSS feed for family events
 FAMILIES_510_RSS = "https://www.510families.com/calendar/feed/"
 
-# Simple in-memory cache for Manus results to avoid hitting rate limits
-_manus_cache = {}  # key: cache_key -> {"items": [...], "timestamp": datetime}
-MANUS_CACHE_TTL_SECONDS = 3600  # 1 hour
+# New data source API keys (optional - gracefully degrade when not set)
+YELP_API_KEY = os.environ.get("YELP_API_KEY", "").strip() or None
+TICKETMASTER_API_KEY = os.environ.get("TICKETMASTER_API_KEY", "").strip() or None
+TRIPADVISOR_API_KEY = os.environ.get("TRIPADVISOR_API_KEY", "").strip() or None
 
 # Cache for crawled event descriptions
 _description_cache = {}  # key: url -> {"description": str, "timestamp": datetime}
@@ -134,111 +132,10 @@ def fetch_event_description(url, timeout=5):
         return None
 
 
-def _get_manus_fallback_data(profile):
-    """Return mock local event data when Manus is rate-limited and no cache exists."""
-    interests = (profile or {}).get("interests", [])
-    
-    # Extract user's city/state from their location for more specific venue names
-    loc = (profile or {}).get("location", {})
-    user_city = ""
-    user_state = ""
-    if isinstance(loc, dict):
-        addr = loc.get("formatted_address") or loc.get("input") or ""
-        import re
-        # Try to extract city and state from address
-        city_state_match = re.search(r'([A-Za-z\s]+),\s*([A-Z]{2})', addr)
-        if city_state_match:
-            user_city = city_state_match.group(1).strip()
-            user_state = city_state_match.group(2)
-    
-    # Generate interest-based mock data with location-aware venue names
-    # Distance/travel time will be calculated by geocoding
-    fallback_items = []
-    
-    # Use user's city/state for more accurate geocoding
-    city_suffix = f", {user_city}, {user_state}" if user_city and user_state else (f", {user_state}" if user_state else "")
-    
-    if "arts_culture" in interests or "learning" in interests or not interests:
-        fallback_items.append({
-            "title": "Art Walk",
-            "link": "https://example.com/art-walk",
-            "description": "Explore local galleries and street art in the downtown arts district.",
-            "location_str": f"Downtown Arts District{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/art-walk",
-            "category": "arts_culture",
-            # No hardcoded distance - let geocoding calculate it
-            "price_flag": "free",
-        })
-    
-    if "nature" in interests or "outdoor" in interests or not interests:
-        fallback_items.append({
-            "title": "Local Park Nature Walk",
-            "link": "https://example.com/park",
-            "description": "Enjoy a peaceful morning walk through the local park trails.",
-            "location_str": f"Regional Park{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/park",
-            "category": "nature",
-            "price_flag": "free",
-        })
-    
-    if "food_drink" in interests or not interests:
-        fallback_items.append({
-            "title": "Farmers Market",
-            "link": "https://example.com/farmers-market",
-            "description": "Fresh local produce, artisan goods, and food trucks.",
-            "location_str": f"Farmers Market{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/farmers-market",
-            "category": "food_drink",
-            "price_flag": "$",
-        })
-    
-    if "shopping" in interests:
-        fallback_items.append({
-            "title": "Local Boutique Shopping District",
-            "link": "https://example.com/shopping",
-            "description": "Discover unique finds at local independent shops and boutiques.",
-            "location_str": f"Main Street Shopping District{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/shopping",
-            "category": "shopping",
-            "price_flag": "$$",
-        })
-    
-    if "fitness" in interests or "sports" in interests:
-        fallback_items.append({
-            "title": "Community Fitness in the Park",
-            "link": "https://example.com/fitness",
-            "description": "Free outdoor yoga and fitness classes.",
-            "location_str": f"Recreation Center{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/fitness",
-            "category": "fitness",
-            "price_flag": "free",
-        })
-    
-    # Add a general event if we have few items
-    if len(fallback_items) < 3:
-        fallback_items.append({
-            "title": "Community Festival",
-            "link": "https://example.com/festival",
-            "description": "Family-friendly festival with live music, food, and activities.",
-            "location_str": f"City Center{city_suffix}",
-            "source": "Manus (fallback)",
-            "source_url": "https://example.com/festival",
-            "category": "events",
-            "price_flag": "free",
-        })
-    
-    return fallback_items[:5]
-
-
 def profile_to_prompt(profile):
     """
     Convert user preference dict to a natural-language prompt for personalized
-    local activity recommendations (e.g. for Manus or other agents).
+    local activity recommendations.
     """
     location = "San Francisco, CA"
     if profile:
@@ -305,7 +202,7 @@ def profile_to_prompt(profile):
     )
 
 
-def _fetch_url(url, timeout=10, headers=None):
+def _fetch_url(url, timeout=4, headers=None):
     """Fetch URL and return bytes or None."""
     headers = headers or {}
     if "User-Agent" not in headers:
@@ -406,7 +303,7 @@ def _parse_rss_or_atom(raw_bytes, feed_url, source_label):
     return items
 
 
-def fetch_rss_feed(feed_url, source_label=None, timeout=10):
+def fetch_rss_feed(feed_url, source_label=None, timeout=4):
     """
     Fetch a single RSS or Atom feed and return normalized items.
     source_label: optional name (e.g. "Axios Local", "Facebook Local") for display.
@@ -419,7 +316,7 @@ def fetch_rss_feed(feed_url, source_label=None, timeout=10):
     return _parse_rss_or_atom(raw, feed_url, label)
 
 
-def fetch_all_rss_feeds(feed_configs, timeout=10):
+def fetch_all_rss_feeds(feed_configs, timeout=4):
     """
     feed_configs: list of dicts { "url": "...", "label": "Axios Local" } or list of URL strings.
     Returns list of normalized feed items from all feeds.
@@ -457,7 +354,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
             "access_token": access_token,
             "limit": 20,
         }
-        r = requests.get(search_url, params=params, timeout=10)
+        r = requests.get(search_url, params=params, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Facebook search error: {r.status_code}")
             return []
@@ -478,7 +375,7 @@ def fetch_facebook_events_near(lat, lng, distance_meters, access_token, limit=10
                 "access_token": access_token,
                 "limit": 5,
             }
-            er = requests.get(events_url, params=ep, timeout=8)
+            er = requests.get(events_url, params=ep, timeout=4)
             if er.status_code != 200:
                 continue
             ed = er.json()
@@ -516,7 +413,7 @@ def fetch_eventbrite_events(lat, lng, radius_km, token, limit=10):
             "expand": "venue",
         }
         headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
+        r = requests.get(url, params=params, headers=headers, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Eventbrite error: {r.status_code}")
             return []
@@ -567,7 +464,7 @@ def fetch_luma_events(lat, lng, radius_miles=25, limit=10):
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
                 "Accept": "text/html,application/xhtml+xml",
             }
-            r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+            r = requests.get(url, headers=headers, timeout=4, allow_redirects=True)
             if r.status_code != 200:
                 continue
             
@@ -683,7 +580,7 @@ def fetch_meetup_events(lat, lng, radius_miles=25, categories=None, limit=10):
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
         }
         
-        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=10)
+        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=4)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Meetup GraphQL error: {r.status_code}")
             return _scrape_meetup_events(lat, lng, limit)
@@ -722,7 +619,7 @@ def _scrape_meetup_events(lat, lng, limit=10):
     try:
         url = f"https://www.meetup.com/find/?location={lat}%2C{lng}&source=EVENTS"
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
-        r = requests.get(url, headers=headers, timeout=10)
+        r = requests.get(url, headers=headers, timeout=4)
         if r.status_code != 200:
             return []
         items = []
@@ -766,7 +663,7 @@ def fetch_510families_events(limit=15):
     try:
         # Use requests library to handle SSL properly
         headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
-        r = requests.get(FAMILIES_510_RSS, headers=headers, timeout=10, verify=True)
+        r = requests.get(FAMILIES_510_RSS, headers=headers, timeout=4, verify=True)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] 510families RSS error: {r.status_code}")
             return []
@@ -1178,7 +1075,7 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
             travel_time_min = None
             print(f"[NORMALIZE] Could not geocode '{search_location}' - distance/travel n/a")
     
-    # Override with provided distance/travel_time if available (e.g. from Manus)
+    # Override with provided distance/travel_time if available
     if item.get("distance_miles") is not None and isinstance(item.get("distance_miles"), (int, float)):
         distance_miles = float(item["distance_miles"])
         travel_time_min = item.get("travel_time_min")
@@ -1249,154 +1146,661 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
     }
 
 
-def _parse_manus_output_text(text):
-    """Extract JSON array of recommendations from Manus agent output (may be in markdown code block)."""
-    if not text or not text.strip():
-        return []
-    text = text.strip()
-    import json
-    # Try to find JSON array in code block or raw
-    for pattern in (r"```(?:json)?\s*([\s\S]*?)```", r"\[\s*\{[\s\S]*\}\s*\]"):
-        m = re.search(pattern, text)
-        if m:
-            raw = m.group(1).strip() if m.lastindex and m.lastindex >= 1 else m.group(0)
-            try:
-                data = json.loads(raw)
-                if isinstance(data, list):
-                    return data
-            except (json.JSONDecodeError, TypeError):
-                pass
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return []
+# ========== NEW DATA SOURCES ==========
 
-
-def _get_manus_cache_key(profile):
-    """Generate a cache key from user profile (location + interests)."""
-    loc = profile.get("location", {})
-    loc_str = loc.get("input") or loc.get("formatted_address") or f"{loc.get('lat')},{loc.get('lng')}"
-    interests = ",".join(sorted(profile.get("interests", [])))
-    return f"{loc_str}|{interests}"
-
-
-def fetch_manus_personalized_feed(profile, api_key, poll_interval=3, poll_timeout=90):
+def fetch_yelp_places(user_lat, user_lng, radius_miles=25, categories=None, limit=15):
     """
-    Call Manus API with user preference as prompt; poll until task completes;
-    parse output into list of raw items { title, link, description, location_str, source }.
-    Uses in-memory cache to avoid hitting rate limits.
+    Fetch places from Yelp Fusion API by location and interest categories.
+    Requires YELP_API_KEY env var. Free tier: 500 calls/day.
     """
-    from datetime import datetime
-    
-    if not api_key or not requests:
-        print("[LOCAL_FEEDS] Manus: no api_key or requests module")
+    if not YELP_API_KEY or not requests:
         return []
-    
-    # Check cache first
-    cache_key = _get_manus_cache_key(profile)
-    if cache_key in _manus_cache:
-        cached = _manus_cache[cache_key]
-        age_seconds = (datetime.now() - cached["timestamp"]).total_seconds()
-        if age_seconds < MANUS_CACHE_TTL_SECONDS:
-            print(f"[LOCAL_FEEDS] Manus: returning {len(cached['items'])} cached items (age={int(age_seconds)}s)")
-            return cached["items"]
-        else:
-            print(f"[LOCAL_FEEDS] Manus: cache expired (age={int(age_seconds)}s)")
-    
-    prompt = profile_to_prompt(profile)
-    print(f"[LOCAL_FEEDS] Manus: creating task with prompt ({len(prompt)} chars)")
     try:
-        r = requests.post(
-            f"{MANUS_API_BASE}/tasks",
-            headers={"accept": "application/json", "content-type": "application/json", "API_KEY": api_key},
-            json={"prompt": prompt, "agentProfile": "manus-1.6"},
-            timeout=15,
-        )
-        print(f"[LOCAL_FEEDS] Manus create task response: {r.status_code}")
-        if r.status_code == 429:
-            # Rate limited - return stale cache if available, else fallback mock data
-            print(f"[LOCAL_FEEDS] Manus rate limited (429): {r.text[:200]}")
-            if cache_key in _manus_cache:
-                cached = _manus_cache[cache_key]
-                print(f"[LOCAL_FEEDS] Manus: returning {len(cached['items'])} stale cached items due to rate limit")
-                return cached["items"]
-            # Return fallback mock data when rate limited and no cache
-            print("[LOCAL_FEEDS] Manus: returning fallback mock data due to rate limit")
-            return _get_manus_fallback_data(profile)
+        # Map our interest categories to Yelp categories
+        interest_to_yelp = {
+            "nature": "parks,hiking,gardens",
+            "outdoor": "parks,hiking,beaches",
+            "arts_culture": "museums,galleries,artclasses",
+            "food_drink": "restaurants,cafes,bakeries",
+            "food_drinks": "restaurants,cafes,bakeries",
+            "fitness": "fitness,gyms,yoga",
+            "sports": "active,recreation,sports_clubs",
+            "learning": "libraries,museums,educationservices",
+            "entertainment": "movietheaters,musicvenues,comedy",
+            "shopping": "shopping,fleamarkets,bookstores",
+            "nightlife": "nightlife,bars,lounges",
+            "family": "kids_activities,playgrounds,zoos",
+            "relaxation": "spas,hotsprings,meditation",
+            "adventure": "active,rafting,climbing",
+            "events": "festivals,localflavor",
+        }
+        yelp_cats = set()
+        for interest in (categories or []):
+            mapped = interest_to_yelp.get(interest, "")
+            if mapped:
+                yelp_cats.update(mapped.split(","))
+        if not yelp_cats:
+            yelp_cats = {"parks", "restaurants", "museums", "arts", "active"}
+
+        radius_meters = min(int(radius_miles * 1609), 40000)
+        url = "https://api.yelp.com/v3/businesses/search"
+        headers = {"Authorization": f"Bearer {YELP_API_KEY}"}
+        params = {
+            "latitude": user_lat,
+            "longitude": user_lng,
+            "radius": radius_meters,
+            "categories": ",".join(list(yelp_cats)[:5]),
+            "sort_by": "best_match",
+            "limit": min(limit, 50),
+        }
+        r = requests.get(url, headers=headers, params=params, timeout=4)
         if r.status_code != 200:
-            print(f"[LOCAL_FEEDS] Manus create task error: {r.status_code} {r.text[:500]}")
+            print(f"[LOCAL_FEEDS] Yelp error: {r.status_code}")
             return []
         data = r.json()
-        task_id = data.get("task_id")
-        print(f"[LOCAL_FEEDS] Manus task_id: {task_id}")
-        if not task_id:
-            print(f"[LOCAL_FEEDS] Manus response missing task_id: {data}")
-            return []
-        # Poll until completed or timeout
-        elapsed = 0
-        print(f"[LOCAL_FEEDS] Manus: polling task {task_id} (timeout={poll_timeout}s)")
-        while elapsed < poll_timeout:
-            tr = requests.get(
-                f"{MANUS_API_BASE}/tasks/{task_id}",
-                headers={"accept": "application/json", "API_KEY": api_key},
-                timeout=10,
-            )
-            if tr.status_code != 200:
-                print(f"[LOCAL_FEEDS] Manus poll error: {tr.status_code}")
-                break
-            task = tr.json()
-            status = task.get("status", "")
-            print(f"[LOCAL_FEEDS] Manus task status: {status} (elapsed={elapsed}s)")
-            if status == "completed":
-                output = task.get("output") or []
-                all_text = []
-                for msg in output:
-                    for c in msg.get("content") or []:
-                        if c.get("type") == "output_text" and c.get("text"):
-                            all_text.append(c["text"])
-                text = "\n".join(all_text)
-                print(f"[LOCAL_FEEDS] Manus output text length: {len(text)}")
-                arr = _parse_manus_output_text(text)
-                print(f"[LOCAL_FEEDS] Manus parsed {len(arr)} items")
-                raw_items = []
-                for i, obj in enumerate(arr):
-                    if not isinstance(obj, dict):
-                        continue
-                    title = obj.get("title") or obj.get("name") or ""
-                    if not title:
-                        continue
-                    raw_items.append({
-                        "title": title,
-                        "link": obj.get("link") or obj.get("url") or "",
-                        "description": obj.get("explanation") or obj.get("description") or "",
-                        "location_str": obj.get("address") or "",
-                        "source": "Manus",
-                        "source_url": obj.get("link") or obj.get("url") or "https://manus.im",
-                        "category": obj.get("category") or "events",
-                        "distance_miles": obj.get("distance_miles"),
-                        "travel_time_min": obj.get("travel_time_min"),
-                        "price_flag": obj.get("price_flag") or "$",
-                        "kid_friendly": obj.get("kid_friendly", False),
-                    })
-                # Cache successful results
-                if raw_items:
-                    _manus_cache[cache_key] = {"items": raw_items, "timestamp": datetime.now()}
-                    print(f"[LOCAL_FEEDS] Manus: cached {len(raw_items)} items for key {cache_key[:30]}...")
-                return raw_items
-            if status == "failed":
-                print(f"[LOCAL_FEEDS] Manus task failed: {task.get('error', '')[:200]}")
-                return []
-            import time
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-        print("[LOCAL_FEEDS] Manus task timed out")
-        return []
+        items = []
+        yelp_cat_map = {
+            "parks": "nature", "hiking": "nature", "gardens": "nature", "beaches": "nature",
+            "museums": "arts_culture", "galleries": "arts_culture", "artclasses": "arts_culture",
+            "restaurants": "food_drink", "cafes": "food_drink", "bakeries": "food_drink",
+            "fitness": "fitness", "gyms": "fitness", "yoga": "fitness",
+            "kids_activities": "family", "playgrounds": "family", "zoos": "family",
+            "shopping": "shopping", "bookstores": "shopping",
+            "nightlife": "nightlife", "bars": "nightlife",
+        }
+        for biz in data.get("businesses", [])[:limit]:
+            loc = biz.get("location", {})
+            addr_parts = [loc.get("address1", ""), loc.get("city", ""), loc.get("state", "")]
+            address = ", ".join([p for p in addr_parts if p])
+            # Map first yelp category to our system
+            biz_cats = [c.get("alias", "") for c in biz.get("categories", [])]
+            our_cat = "events"
+            for bc in biz_cats:
+                if bc in yelp_cat_map:
+                    our_cat = yelp_cat_map[bc]
+                    break
+            price_str = biz.get("price", "$") or "$"
+            distance_m = biz.get("distance", 0)
+            distance_mi = round(distance_m / 1609.34, 1) if distance_m else None
+            items.append({
+                "title": biz.get("name", ""),
+                "link": biz.get("url", ""),
+                "description": f"Rating: {biz.get('rating', 'N/A')}★ ({biz.get('review_count', 0)} reviews). {', '.join(biz_cats[:3])}",
+                "location_str": address,
+                "source": "Yelp",
+                "source_url": biz.get("url", "https://www.yelp.com"),
+                "category": our_cat,
+                "distance_miles": distance_mi,
+                "travel_time_min": max(5, int(round((distance_mi / 25) * 60))) if distance_mi else None,
+                "price_flag": price_str,
+                "kid_friendly": our_cat == "family" or "kids" in " ".join(biz_cats),
+            })
+        print(f"[LOCAL_FEEDS] Yelp: fetched {len(items)} places")
+        return items
     except Exception as e:
-        print(f"[LOCAL_FEEDS] Manus error: {e}")
+        print(f"[LOCAL_FEEDS] Yelp error: {e}")
         return []
+
+
+def fetch_ticketmaster_events(user_lat, user_lng, radius_miles=25, limit=15):
+    """
+    Fetch events from Ticketmaster Discovery API.
+    Requires TICKETMASTER_API_KEY env var. Free tier: 5000 calls/day.
+    """
+    if not TICKETMASTER_API_KEY or not requests:
+        return []
+    try:
+        url = "https://app.ticketmaster.com/discovery/v2/events.json"
+        params = {
+            "apikey": TICKETMASTER_API_KEY,
+            "latlong": f"{user_lat},{user_lng}",
+            "radius": str(min(int(radius_miles), 100)),
+            "unit": "miles",
+            "size": min(limit, 50),
+            "sort": "date,asc",
+        }
+        r = requests.get(url, params=params, timeout=4)
+        if r.status_code != 200:
+            print(f"[LOCAL_FEEDS] Ticketmaster error: {r.status_code}")
+            return []
+        data = r.json()
+        events = data.get("_embedded", {}).get("events", [])
+        items = []
+        for ev in events[:limit]:
+            name = ev.get("name", "Event")
+            event_url = ev.get("url", "")
+            # Date
+            dates = ev.get("dates", {}).get("start", {})
+            event_date = dates.get("localDate", "") or dates.get("dateTime", "")
+            # Venue
+            venues = ev.get("_embedded", {}).get("venues", [])
+            venue_name = venues[0].get("name", "") if venues else ""
+            venue_addr = ""
+            if venues:
+                addr = venues[0].get("address", {})
+                city_info = venues[0].get("city", {})
+                state_info = venues[0].get("state", {})
+                venue_addr = ", ".join(filter(None, [
+                    addr.get("line1", ""),
+                    city_info.get("name", ""),
+                    state_info.get("stateCode", ""),
+                ]))
+            # Price
+            price_ranges = ev.get("priceRanges", [])
+            price_flag = "$"
+            if price_ranges:
+                min_price = price_ranges[0].get("min", 0)
+                if min_price == 0:
+                    price_flag = "free"
+                elif min_price < 30:
+                    price_flag = "$"
+                elif min_price < 75:
+                    price_flag = "$$"
+                else:
+                    price_flag = "$$$"
+            # Image
+            images = ev.get("images", [])
+            image_url = images[0].get("url", "") if images else ""
+            # Category from classifications
+            classifications = ev.get("classifications", [])
+            segment = classifications[0].get("segment", {}).get("name", "").lower() if classifications else ""
+            our_cat = "events"
+            if "music" in segment:
+                our_cat = "entertainment"
+            elif "sport" in segment:
+                our_cat = "fitness"
+            elif "arts" in segment or "theatre" in segment:
+                our_cat = "arts_culture"
+            elif "family" in segment:
+                our_cat = "family"
+            loc_str = f"{venue_name}, {venue_addr}" if venue_name else venue_addr
+            items.append({
+                "title": name,
+                "link": event_url,
+                "description": f"{venue_name}. {event_date}",
+                "location_str": loc_str,
+                "source": "Ticketmaster",
+                "source_url": event_url or "https://www.ticketmaster.com",
+                "category": our_cat,
+                "event_date": event_date,
+                "event_link": event_url,
+                "price_flag": price_flag,
+                "kid_friendly": our_cat == "family",
+                "photo_url": image_url,
+            })
+        print(f"[LOCAL_FEEDS] Ticketmaster: fetched {len(items)} events")
+        return items
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] Ticketmaster error: {e}")
+        return []
+
+
+def fetch_osm_places(user_lat, user_lng, radius_miles=10, limit=15):
+    """
+    Fetch POIs from OpenStreetMap via Overpass API. No API key needed.
+    Queries parks, playgrounds, museums, libraries, nature reserves, viewpoints.
+    """
+    if not requests:
+        return []
+    try:
+        from math import radians, cos
+        # Build bounding box from radius
+        lat_delta = radius_miles / 69.0
+        lng_delta = radius_miles / (69.0 * max(cos(radians(user_lat)), 0.01))
+        south = user_lat - lat_delta
+        north = user_lat + lat_delta
+        west = user_lng - lng_delta
+        east = user_lng + lng_delta
+
+        # Overpass QL query for interesting POIs
+        query = f"""
+[out:json][timeout:8];
+(
+  node["leisure"="park"]({south},{west},{north},{east});
+  node["leisure"="playground"]({south},{west},{north},{east});
+  node["tourism"="museum"]({south},{west},{north},{east});
+  node["amenity"="library"]({south},{west},{north},{east});
+  node["leisure"="nature_reserve"]({south},{west},{north},{east});
+  node["tourism"="viewpoint"]({south},{west},{north},{east});
+  way["leisure"="park"]({south},{west},{north},{east});
+  way["leisure"="nature_reserve"]({south},{west},{north},{east});
+);
+out center {limit * 3};
+"""
+        url = "https://overpass-api.de/api/interpreter"
+        r = requests.post(url, data={"data": query}, timeout=4)
+        if r.status_code != 200:
+            print(f"[LOCAL_FEEDS] Overpass error: {r.status_code}")
+            return []
+        data = r.json()
+        elements = data.get("elements", [])
+        items = []
+        from math import radians as rad, sin, cos as cos_f, sqrt, atan2
+        for el in elements:
+            tags = el.get("tags", {})
+            name = tags.get("name")
+            if not name:
+                continue
+            # Get coordinates (node has lat/lon directly; way has center)
+            lat = el.get("lat") or (el.get("center", {}) or {}).get("lat")
+            lng = el.get("lon") or (el.get("center", {}) or {}).get("lon")
+            if lat is None or lng is None:
+                continue
+            # Calculate distance
+            R = 3959
+            la1, lo1 = rad(user_lat), rad(user_lng)
+            la2, lo2 = rad(lat), rad(lng)
+            dlat = la2 - la1
+            dlng = lo2 - lo1
+            a = sin(dlat / 2) ** 2 + cos_f(la1) * cos_f(la2) * sin(dlng / 2) ** 2
+            c = 2 * atan2(sqrt(a), sqrt(1 - a))
+            dist_mi = round(R * c, 1)
+            # Map OSM tags to category
+            our_cat = "nature"
+            if tags.get("tourism") == "museum":
+                our_cat = "arts_culture"
+            elif tags.get("amenity") == "library":
+                our_cat = "learning"
+            elif tags.get("leisure") == "playground":
+                our_cat = "family"
+            elif tags.get("tourism") == "viewpoint":
+                our_cat = "nature"
+            addr_parts = [tags.get("addr:street", ""), tags.get("addr:city", ""), tags.get("addr:state", "")]
+            address = ", ".join([p for p in addr_parts if p]) or f"{lat:.4f}, {lng:.4f}"
+            gmaps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+            items.append({
+                "title": name,
+                "link": gmaps_url,
+                "description": f"{tags.get('leisure') or tags.get('tourism') or tags.get('amenity', 'place')}",
+                "location_str": address,
+                "source": "OpenStreetMap",
+                "source_url": gmaps_url,
+                "category": our_cat,
+                "distance_miles": dist_mi,
+                "travel_time_min": max(5, int(round((dist_mi / 25) * 60))),
+                "price_flag": "free",
+                "kid_friendly": tags.get("leisure") == "playground" or our_cat == "family",
+            })
+        # Sort by distance, return closest
+        items.sort(key=lambda x: x.get("distance_miles", 999))
+        print(f"[LOCAL_FEEDS] OSM/Overpass: fetched {len(items[:limit])} places")
+        return items[:limit]
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] OSM/Overpass error: {e}")
+        return []
+
+
+def fetch_eventbrite_public(user_lat, user_lng, radius_miles=25, limit=10):
+    """
+    Scrape Eventbrite public event search page for local events.
+    No API key needed — parses JSON-LD structured data from the page.
+    Complement to fetch_eventbrite_events (which needs a token).
+    """
+    if not requests:
+        return []
+    try:
+        import json as _json
+        # Derive a location slug from coordinates via reverse geocode approximation
+        # Use a simple city name approach
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+        }
+        # Try a generic location-based search
+        url = f"https://www.eventbrite.com/d/united-states/events/?lat={user_lat}&lng={user_lng}&radius={int(radius_miles)}mi"
+        r = requests.get(url, headers=headers, timeout=4, allow_redirects=True)
+        if r.status_code != 200:
+            print(f"[LOCAL_FEEDS] Eventbrite public: {r.status_code}")
+            return []
+        items = []
+        # Parse JSON-LD structured data
+        for match in re.finditer(r'<script type="application/ld\+json">\s*(\{[^<]+\})\s*</script>', r.text):
+            try:
+                data = _json.loads(match.group(1))
+                if data.get("@type") == "Event" or data.get("@type") == "SocialEvent":
+                    loc = data.get("location", {})
+                    loc_str = ""
+                    if isinstance(loc, dict):
+                        loc_name = loc.get("name", "")
+                        addr = loc.get("address", {})
+                        if isinstance(addr, dict):
+                            loc_str = ", ".join(filter(None, [
+                                loc_name,
+                                addr.get("streetAddress", ""),
+                                addr.get("addressLocality", ""),
+                                addr.get("addressRegion", ""),
+                            ]))
+                        elif isinstance(addr, str):
+                            loc_str = f"{loc_name}, {addr}" if loc_name else addr
+                    items.append({
+                        "title": data.get("name", "Event"),
+                        "link": data.get("url", ""),
+                        "description": (data.get("description", "") or "")[:500],
+                        "location_str": loc_str,
+                        "source": "Eventbrite",
+                        "source_url": data.get("url", "https://www.eventbrite.com"),
+                        "category": "events",
+                        "event_date": data.get("startDate", ""),
+                        "price_flag": "$",
+                        "kid_friendly": False,
+                    })
+            except (_json.JSONDecodeError, TypeError):
+                continue
+        # Also try parsing event cards from HTML as fallback
+        if not items:
+            for match in re.finditer(
+                r'data-event-id="(\d+)"[^>]*>.*?<h2[^>]*>(.*?)</h2>',
+                r.text, re.DOTALL
+            ):
+                eid = match.group(1)
+                title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
+                if title:
+                    items.append({
+                        "title": title,
+                        "link": f"https://www.eventbrite.com/e/{eid}",
+                        "description": "",
+                        "location_str": "",
+                        "source": "Eventbrite",
+                        "source_url": f"https://www.eventbrite.com/e/{eid}",
+                        "category": "events",
+                        "price_flag": "$",
+                        "kid_friendly": False,
+                    })
+        print(f"[LOCAL_FEEDS] Eventbrite public: fetched {len(items[:limit])} events")
+        return items[:limit]
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] Eventbrite public error: {e}")
+        return []
+
+
+def fetch_patch_events(user_lat, user_lng, limit=10):
+    """
+    Fetch local news/events from Patch.com RSS feeds.
+    Tries RSS feeds for Bay Area cities near the user's location.
+    No API key needed.
+    """
+    if not requests:
+        return []
+    try:
+        # Bay Area cities mapped to Patch slugs
+        bay_area_cities = [
+            (37.5485, -121.9886, "fremont"),
+            (37.5297, -122.0402, "newark"),
+            (37.5934, -122.0439, "union-city"),
+            (37.6688, -122.0808, "hayward"),
+            (37.6879, -122.0902, "castro-valley"),
+            (37.8044, -122.2712, "oakland"),
+            (37.8716, -122.2727, "berkeley"),
+            (37.5586, -122.2711, "san-mateo"),
+            (37.3382, -121.8863, "san-jose"),
+            (37.4419, -122.1430, "palo-alto"),
+            (37.5022, -122.2594, "redwood-city"),
+            (37.4005, -122.1081, "sunnyvale"),
+            (37.3688, -122.0363, "cupertino"),
+            (37.3861, -122.0839, "mountain-view"),
+            (37.7749, -122.4194, "san-francisco"),
+        ]
+        # Find closest cities
+        from math import radians, sin, cos, sqrt, atan2
+        city_dists = []
+        for clat, clng, slug in bay_area_cities:
+            R = 3959
+            la1, lo1 = radians(user_lat), radians(user_lng)
+            la2, lo2 = radians(clat), radians(clng)
+            dlat = la2 - la1
+            dlng = lo2 - lo1
+            a = sin(dlat / 2) ** 2 + cos(la1) * cos(la2) * sin(dlng / 2) ** 2
+            c = 2 * atan2(sqrt(a), sqrt(1 - a))
+            city_dists.append((R * c, slug))
+        city_dists.sort()
+        # Try the 3 closest cities
+        items = []
+        headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
+        for _, slug in city_dists[:3]:
+            rss_url = f"https://patch.com/california/{slug}/rss"
+            try:
+                r = requests.get(rss_url, headers=headers, timeout=4)
+                if r.status_code != 200:
+                    continue
+                parsed = _parse_rss_or_atom(r.content, rss_url, f"Patch ({slug})")
+                for item in parsed:
+                    # Check if it looks like an event
+                    title_lower = (item.get("title", "") or "").lower()
+                    desc_lower = (item.get("description", "") or "").lower()
+                    is_event = any(kw in title_lower or kw in desc_lower for kw in
+                                   ["event", "festival", "fair", "concert", "show", "class",
+                                    "workshop", "opening", "celebration", "market", "parade"])
+                    item["source"] = f"Patch ({slug})"
+                    item["source_url"] = rss_url
+                    item["category"] = "events" if is_event else "local_news"
+                    item["price_flag"] = "free"
+                    item["kid_friendly"] = False
+                    items.append(item)
+            except Exception as e:
+                print(f"[LOCAL_FEEDS] Patch {slug} error: {e}")
+                continue
+            if len(items) >= limit:
+                break
+        print(f"[LOCAL_FEEDS] Patch: fetched {len(items[:limit])} items")
+        return items[:limit]
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] Patch error: {e}")
+        return []
+
+
+def fetch_tripadvisor_places(user_lat, user_lng, radius_miles=25, limit=10):
+    """
+    Fetch places from TripAdvisor Content API.
+    Requires TRIPADVISOR_API_KEY env var. Free tier: 5000 calls/month.
+    """
+    if not TRIPADVISOR_API_KEY or not requests:
+        return []
+    try:
+        url = "https://api.content.tripadvisor.com/api/v1/location/nearby_search"
+        params = {
+            "latLong": f"{user_lat},{user_lng}",
+            "radius": min(int(radius_miles), 50),
+            "radiusUnit": "mi",
+            "language": "en",
+            "key": TRIPADVISOR_API_KEY,
+        }
+        headers = {
+            "Accept": "application/json",
+            "Referer": "https://www.tripadvisor.com",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=4)
+        if r.status_code != 200:
+            print(f"[LOCAL_FEEDS] TripAdvisor error: {r.status_code}")
+            return []
+        data = r.json()
+        locations = data.get("data", [])
+        items = []
+        for loc in locations[:limit]:
+            name = loc.get("name", "")
+            if not name:
+                continue
+            addr = loc.get("address_obj", {})
+            addr_str = ", ".join(filter(None, [
+                addr.get("street1", ""),
+                addr.get("city", ""),
+                addr.get("state", ""),
+            ]))
+            distance_str = loc.get("distance", "")
+            # Parse distance (e.g., "3.5")
+            dist_val = None
+            try:
+                dist_val = float(distance_str) if distance_str else None
+            except (ValueError, TypeError):
+                pass
+            location_id = loc.get("location_id", "")
+            ta_url = f"https://www.tripadvisor.com/Attraction_Review-g{location_id}" if location_id else ""
+            items.append({
+                "title": name,
+                "link": ta_url,
+                "description": loc.get("description", "") or f"TripAdvisor listing",
+                "location_str": addr_str,
+                "source": "TripAdvisor",
+                "source_url": ta_url or "https://www.tripadvisor.com",
+                "category": "attractions",
+                "distance_miles": dist_val,
+                "travel_time_min": max(5, int(round((dist_val / 25) * 60))) if dist_val else None,
+                "price_flag": "$",
+                "kid_friendly": False,
+            })
+        print(f"[LOCAL_FEEDS] TripAdvisor: fetched {len(items)} places")
+        return items
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] TripAdvisor error: {e}")
+        return []
+
+
+def fetch_alltrails_trails(user_lat, user_lng, radius_miles=25, limit=10):
+    """
+    Fetch parks and trails from the National Park Service API (free, no key required
+    beyond DEMO_KEY) plus SF Fun Cheap events for outdoor/nature activities.
+    Replaces AllTrails scraping which returns 403.
+    """
+    if not requests:
+        return []
+    items = []
+
+    # Source 1: NPS API — national/state parks in California
+    try:
+        NPS_KEY = os.environ.get("NPS_API_KEY", "DEMO_KEY")
+        r = requests.get(
+            "https://developer.nps.gov/api/v1/parks",
+            params={"stateCode": "CA", "limit": 50, "api_key": NPS_KEY},
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            from math import radians, sin, cos, sqrt, atan2
+            data = r.json()
+            parks = data.get("data", [])
+            for park in parks:
+                name = park.get("fullName", "")
+                if not name:
+                    continue
+                plat = float(park.get("latitude") or 0)
+                plng = float(park.get("longitude") or 0)
+                if plat == 0 and plng == 0:
+                    continue
+                # Calculate distance
+                R = 3959
+                la1, lo1 = radians(user_lat), radians(user_lng)
+                la2, lo2 = radians(plat), radians(plng)
+                dlat = la2 - la1
+                dlng = lo2 - lo1
+                a = sin(dlat / 2) ** 2 + cos(la1) * cos(la2) * sin(dlng / 2) ** 2
+                c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                dist = R * c
+                if dist > radius_miles:
+                    continue
+                travel_min = max(5, int(round((dist / 25) * 60)))
+                addresses = park.get("addresses", [])
+                addr = ""
+                if addresses:
+                    a0 = addresses[0]
+                    addr = f"{a0.get('line1', '')}, {a0.get('city', '')}, {a0.get('stateCode', '')}".strip(", ")
+                desc = (park.get("description") or "")[:300]
+                activities = [a.get("name", "") for a in park.get("activities", [])[:5]]
+                if activities:
+                    desc += f" Activities: {', '.join(activities)}"
+                items.append({
+                    "title": name,
+                    "link": park.get("url", ""),
+                    "description": desc,
+                    "location_str": addr or f"{park.get('states', 'CA')}",
+                    "source": "National Park Service",
+                    "source_url": park.get("url", "https://www.nps.gov"),
+                    "category": "nature",
+                    "distance_miles": round(dist, 1),
+                    "travel_time_min": travel_min,
+                    "price_flag": "free" if not park.get("entranceFees") or (park["entranceFees"][0].get("cost", "0") in ("0", "0.00", "0.0000")) else "$",
+                    "kid_friendly": True,
+                })
+            items.sort(key=lambda x: x.get("distance_miles", 999))
+            print(f"[LOCAL_FEEDS] NPS: {len(items)} parks within {radius_miles}mi")
+        else:
+            print(f"[LOCAL_FEEDS] NPS API: {r.status_code}")
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] NPS error: {e}")
+
+    # Source 2: SF Fun Cheap RSS — free/cheap outdoor events
+    try:
+        r2 = requests.get(
+            "https://sf.funcheap.com/feed/",
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=4,
+        )
+        if r2.status_code == 200:
+            parsed = _parse_rss_or_atom(r2.content, "https://sf.funcheap.com/feed/", "SF Fun Cheap")
+            for item in parsed[:15]:
+                title = item.get("title", "")
+                # Filter for outdoor/nature/park related events
+                title_lower = title.lower()
+                outdoor_keywords = ["park", "hike", "trail", "garden", "beach", "nature", "walk", "outdoor", "bike", "farm"]
+                if any(kw in title_lower for kw in outdoor_keywords):
+                    item["category"] = "nature"
+                else:
+                    item["category"] = "events"
+                item["source"] = "SF Fun Cheap"
+                item["price_flag"] = "free"
+                item["kid_friendly"] = "kid" in title_lower or "family" in title_lower or "free" in title_lower
+                items.append(item)
+            print(f"[LOCAL_FEEDS] SF Fun Cheap: {len(parsed)} events")
+        else:
+            print(f"[LOCAL_FEEDS] SF Fun Cheap: {r2.status_code}")
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] SF Fun Cheap error: {e}")
+
+    print(f"[LOCAL_FEEDS] AllTrails/nature: fetched {len(items[:limit])} total items")
+    return items[:limit]
+
+
+def fetch_parks_rec_events(user_lat, user_lng, radius_miles=25, limit=10):
+    """
+    Fetch community events from working Bay Area RSS feeds.
+    Replaces broken city Parks & Rec feeds (most return 403/404) with
+    reliable sources: SF Fun Cheap, SF Parks Alliance, and local library feeds.
+    No API key needed.
+    """
+    if not requests:
+        return []
+    items = []
+
+    # Working Bay Area community event RSS feeds
+    community_feeds = [
+        ("SF Fun Cheap", "https://sf.funcheap.com/feed/"),
+        ("SF Parks Alliance", "https://www.sfparksalliance.org/feed"),
+    ]
+
+    headers = {"User-Agent": "ActivityPlanner/1.0 (Local Feeds)"}
+
+    for source_name, feed_url in community_feeds:
+        try:
+            r = requests.get(feed_url, headers=headers, timeout=4, allow_redirects=True)
+            if r.status_code != 200:
+                print(f"[LOCAL_FEEDS] {source_name}: {r.status_code}")
+                continue
+            parsed = _parse_rss_or_atom(r.content, feed_url, source_name)
+            for item in parsed:
+                title_lower = (item.get("title") or "").lower()
+                item["source"] = source_name
+                item["source_url"] = feed_url
+                item["category"] = "events"
+                item["price_flag"] = "free" if ("free" in title_lower or source_name == "SF Fun Cheap") else "$"
+                item["kid_friendly"] = any(kw in title_lower for kw in ["family", "kid", "children", "park"])
+                if not item.get("location_str"):
+                    item["location_str"] = "San Francisco, CA"
+                items.append(item)
+            print(f"[LOCAL_FEEDS] {source_name}: {len(parsed)} items")
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] {source_name} error: {e}")
+            continue
+
+    print(f"[LOCAL_FEEDS] Parks & Rec/Community: fetched {len(items[:limit])} events")
+    return items[:limit]
 
 
 def get_local_feed_config():
@@ -1406,7 +1810,9 @@ def get_local_feed_config():
     LOCAL_FEED_LABELS: optional comma-separated labels (same order as URLs)
     FACEBOOK_ACCESS_TOKEN: optional token for Facebook events
     EVENTBRITE_TOKEN: optional token for Eventbrite
-    MANUS_API_KEY: optional token for Manus AI personalized local feed
+    YELP_API_KEY: optional Yelp Fusion API key
+    TICKETMASTER_API_KEY: optional Ticketmaster Discovery API key
+    TRIPADVISOR_API_KEY: optional TripAdvisor Content API key
     """
     urls_str = os.environ.get("LOCAL_FEED_URLS", "").strip()
     labels_str = os.environ.get("LOCAL_FEED_LABELS", "").strip()
@@ -1419,7 +1825,14 @@ def get_local_feed_config():
         "feed_configs": feed_configs,
         "facebook_token": os.environ.get("FACEBOOK_ACCESS_TOKEN", "").strip() or None,
         "eventbrite_token": os.environ.get("EVENTBRITE_TOKEN", "").strip() or None,
-        "manus_api_key": os.environ.get("MANUS_API_KEY", "").strip() or None,
+        "yelp_api_key": YELP_API_KEY,
+        "ticketmaster_api_key": TICKETMASTER_API_KEY,
+        "tripadvisor_api_key": TRIPADVISOR_API_KEY,
+        "osm_overpass": True,  # Always available (no key needed)
+        "eventbrite_public": True,  # Always available (scraping)
+        "patch": True,  # Always available (RSS)
+        "alltrails": True,  # Always available (scraping)
+        "parks_rec": True,  # Always available (RSS)
     }
 
 
@@ -1430,7 +1843,6 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     rank by relevance, filter by travel/radius, and return top items.
     
     Sources:
-    - Manus AI (personalized recommendations)
     - Luma (lu.ma events)
     - Meetup (local meetups)
     - 510families.com (family events - East Bay)
@@ -1446,16 +1858,6 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     user_interests = (profile or {}).get("interests", [])
 
     print(f"[LOCAL_FEEDS] Fetching from all sources for ({user_lat}, {user_lng}), radius={radius_miles}mi (parallel)")
-
-    def _fetch_manus():
-        if not config.get("manus_api_key"):
-            return []
-        try:
-            # Shorter timeout (15s) and poll (1s) so we return within fetch window; other sources fill in
-            return fetch_manus_personalized_feed(profile, config["manus_api_key"], poll_interval=1, poll_timeout=15)
-        except Exception as e:
-            print(f"[LOCAL_FEEDS] Manus error: {e}")
-            return []
 
     def _fetch_luma():
         try:
@@ -1502,20 +1904,87 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
         if not config.get("feed_configs"):
             return []
         try:
-            return fetch_all_rss_feeds(config["feed_configs"], timeout=6)
+            return fetch_all_rss_feeds(config["feed_configs"], timeout=4)
         except Exception as e:
             print(f"[LOCAL_FEEDS] RSS error: {e}")
             return []
 
-    # Fetch all sources in parallel (max wait = slowest source, not sum of all)
-    tasks = [_fetch_luma, _fetch_meetup, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss]
-    if config.get("manus_api_key"):
-        tasks.insert(0, _fetch_manus)
+    def _fetch_yelp():
+        if not YELP_API_KEY:
+            return []
+        try:
+            return fetch_yelp_places(user_lat, user_lng, radius_miles=radius_miles, categories=user_interests, limit=15)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] Yelp error: {e}")
+            return []
 
-    # Early return: stop waiting after 18s so we return fast with Luma/Meetup/RSS results.
-    # Manus can take 20–45s; don't block the whole response on it.
-    FETCH_TIMEOUT = 18
-    with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as executor:
+    def _fetch_ticketmaster():
+        if not TICKETMASTER_API_KEY:
+            return []
+        try:
+            return fetch_ticketmaster_events(user_lat, user_lng, radius_miles=radius_miles, limit=15)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] Ticketmaster error: {e}")
+            return []
+
+    def _fetch_osm():
+        try:
+            return fetch_osm_places(user_lat, user_lng, radius_miles=min(radius_miles, 15), limit=15)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] OSM error: {e}")
+            return []
+
+    def _fetch_eventbrite_pub():
+        if config.get("eventbrite_token"):
+            return []  # Skip public scraping when we have the API token
+        try:
+            return fetch_eventbrite_public(user_lat, user_lng, radius_miles=radius_miles, limit=10)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] Eventbrite public error: {e}")
+            return []
+
+    def _fetch_patch():
+        try:
+            return fetch_patch_events(user_lat, user_lng, limit=10)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] Patch error: {e}")
+            return []
+
+    def _fetch_tripadvisor():
+        if not TRIPADVISOR_API_KEY:
+            return []
+        try:
+            return fetch_tripadvisor_places(user_lat, user_lng, radius_miles=radius_miles, limit=10)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] TripAdvisor error: {e}")
+            return []
+
+    def _fetch_alltrails():
+        try:
+            return fetch_alltrails_trails(user_lat, user_lng, limit=10)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] AllTrails error: {e}")
+            return []
+
+    def _fetch_parks_rec():
+        try:
+            return fetch_parks_rec_events(user_lat, user_lng, limit=10)
+        except Exception as e:
+            print(f"[LOCAL_FEEDS] Parks & Rec error: {e}")
+            return []
+
+    # Fetch all sources in parallel (max wait = slowest source, not sum of all)
+    # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
+    # _fetch_parks_rec (dead RSS feeds), _fetch_meetup (404 API change),
+    # _fetch_eventbrite_pub (JS-rendered, returns page headers not events)
+    tasks = [
+        _fetch_luma, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
+        _fetch_yelp, _fetch_ticketmaster, _fetch_osm,
+        _fetch_tripadvisor,
+    ]
+    # Early return: stop waiting after 5s so we return fast with available results.
+    FETCH_TIMEOUT = 5
+    with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
         try:
             for future in as_completed(futures, timeout=FETCH_TIMEOUT):
@@ -1536,7 +2005,7 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
         return []
 
     # Cap items to normalize to avoid slow geocoding when many sources return data
-    MAX_RAW_TO_PROCESS = 35
+    MAX_RAW_TO_PROCESS = 60
     if len(raw_items) > MAX_RAW_TO_PROCESS:
         raw_items = raw_items[:MAX_RAW_TO_PROCESS]
         print(f"[LOCAL_FEEDS] Capped to {MAX_RAW_TO_PROCESS} items for faster processing")

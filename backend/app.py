@@ -65,6 +65,9 @@ geocode_cache = {}
 # Cache for image search (query -> url) to avoid hitting API limits
 image_search_cache = {}
 
+# Circuit breaker pattern for external APIs
+_circuit_breakers = {}  # {source: {failures: int, last_failure: datetime, total_calls: int}}
+
 # Image search: Google Custom Search, Pexels, Unsplash (keywords from title + event detail)
 GOOGLE_CSE_API_KEY = os.environ.get('GOOGLE_CSE_API_KEY', '')
 GOOGLE_CSE_CX = os.environ.get('GOOGLE_CSE_CX', '')  # Custom Search Engine ID with Image search enabled
@@ -75,6 +78,13 @@ UNSPLASH_ACCESS_KEY = os.environ.get('UNSPLASH_ACCESS_KEY', '')
 import db as _db
 db = _db
 db.init_db()
+
+# Clean expired cache entries on startup
+try:
+    db.clean_expired_cache()
+    print("[CACHE] Cleaned expired cache entries")
+except Exception as e:
+    print(f"[CACHE] Error cleaning cache: {e}")
 
 # Local feeds (RSS, Facebook, Eventbrite) to complement Google Places
 try:
@@ -491,6 +501,338 @@ def image_search():
 
 # ========== RECOMMENDATIONS ==========
 
+# ========== CIRCUIT BREAKER PATTERN ==========
+
+def is_circuit_open(source):
+    """Check if circuit breaker is open for a source (too many recent failures)."""
+    if source not in _circuit_breakers:
+        return False
+    
+    cb = _circuit_breakers[source]
+    failures = cb.get('failures', 0)
+    last_failure = cb.get('last_failure')
+    
+    # Open circuit if 3+ failures in last 10 minutes
+    if failures >= 3 and last_failure:
+        from datetime import datetime, timedelta
+        if datetime.now() - last_failure < timedelta(minutes=10):
+            return True
+        # Reset after 10 minutes
+        cb['failures'] = 0
+    
+    return False
+
+
+def record_success(source):
+    """Record successful API call for circuit breaker."""
+    if source in _circuit_breakers:
+        _circuit_breakers[source]['failures'] = 0
+        _circuit_breakers[source]['total_calls'] = _circuit_breakers[source].get('total_calls', 0) + 1
+
+
+def record_failure(source):
+    """Record failed API call for circuit breaker."""
+    from datetime import datetime
+    
+    if source not in _circuit_breakers:
+        _circuit_breakers[source] = {'failures': 0, 'total_calls': 0}
+    
+    cb = _circuit_breakers[source]
+    cb['failures'] = cb.get('failures', 0) + 1
+    cb['last_failure'] = datetime.now()
+    cb['total_calls'] = cb.get('total_calls', 0) + 1
+    
+    print(f"[CIRCUIT_BREAKER] {source}: {cb['failures']} failures, last: {cb['last_failure']}")
+
+
+# ========== RECOMMENDATION ENGINE ==========
+
+def get_recommendations(user_id, prefs):
+    """
+    Main recommendation engine with fallback chain:
+    1. Try Google Places API (if key configured)
+    2. Try local feeds (parallel fetch, 15s timeout)  
+    3. Merge and rank results
+    4. Cache successful results
+    5. If all live sources fail, return cached results
+    6. If no cache, return enriched mock data (compute distances from user location)
+    """
+    from datetime import datetime, timedelta
+    import hashlib
+    
+    # Generate cache key from user preferences
+    home_location = prefs.get('home_location', {})
+    user_lat, user_lng = resolve_user_location(home_location)
+    categories = prefs.get('categories', [])
+    location_str = home_location.get('formatted_address') or home_location.get('input') or f"{user_lat},{user_lng}"
+    kid_friendly = prefs.get('kid_friendly', False)
+    travel_time_ranges = prefs.get('travel_time_ranges', [])
+    
+    cache_key_data = f"{user_id}|{location_str}|{','.join(sorted(categories))}|{kid_friendly}|{','.join(sorted(travel_time_ranges))}"
+    cache_key = hashlib.md5(cache_key_data.encode()).hexdigest()[:16]
+    
+    print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
+    
+    # Step 1: Try to get from cache first
+    cached = db.get_cached_recommendations(user_id, cache_key)
+    cached_items = cached['items'] if cached else None
+    
+    # Initialize result tracking
+    all_items = []
+    sources_tried = []
+    sources_succeeded = []
+    sources_failed = []
+    
+    # Step 2: Try Google Places API (if key configured and not circuit broken)
+    if GOOGLE_PLACES_API_KEY and not is_circuit_open('google_places'):
+        print("[RECOMMENDATIONS] Trying Google Places API...")
+        sources_tried.append('google_places')
+        
+        try:
+            places_items = get_google_places_recommendations(prefs, user_id, user_lat, user_lng)
+            if places_items:
+                all_items.extend(places_items)
+                sources_succeeded.append('google_places')
+                record_success('google_places')
+                print(f"[RECOMMENDATIONS] Google Places: {len(places_items)} items")
+            else:
+                record_failure('google_places')
+                sources_failed.append('google_places')
+        except Exception as e:
+            print(f"[RECOMMENDATIONS] Google Places error: {e}")
+            record_failure('google_places')
+            sources_failed.append('google_places')
+    else:
+        if not GOOGLE_PLACES_API_KEY:
+            print("[RECOMMENDATIONS] Google Places API key not configured")
+        if is_circuit_open('google_places'):
+            print("[RECOMMENDATIONS] Google Places circuit breaker open, skipping")
+    
+    # Step 3: Try local feeds (if not circuit broken)
+    if local_feeds and not is_circuit_open('local_feeds'):
+        print("[RECOMMENDATIONS] Trying local feeds...")
+        sources_tried.append('local_feeds')
+        
+        try:
+            # Build profile for local feeds
+            profile = {
+                'location': home_location,
+                'group_type': prefs.get('group_type'),
+                'interests': prefs.get('interests', []),
+                'energy_level': prefs.get('energy_level'),
+                'budget': prefs.get('budget'),
+                'travel_time_ranges': travel_time_ranges,
+                'kid_friendly': kid_friendly
+            }
+            
+            max_travel_min = get_max_travel_time(travel_time_ranges)
+            max_radius_miles = get_max_radius_miles(travel_time_ranges)
+            week_str = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
+            
+            local_items = local_feeds.get_local_feed_recommendations(
+                profile=profile,
+                user_lat=user_lat,
+                user_lng=user_lng,
+                geocode_fn=geocode_to_lat_lng,
+                max_items=10,
+                max_travel_min=max_travel_min,
+                max_radius_miles=max_radius_miles,
+                week_str=week_str
+            )
+            
+            if local_items:
+                all_items.extend(local_items)
+                sources_succeeded.append('local_feeds')
+                record_success('local_feeds')
+                print(f"[RECOMMENDATIONS] Local feeds: {len(local_items)} items")
+            else:
+                record_failure('local_feeds')
+                sources_failed.append('local_feeds')
+        except Exception as e:
+            print(f"[RECOMMENDATIONS] Local feeds error: {e}")
+            record_failure('local_feeds')
+            sources_failed.append('local_feeds')
+    else:
+        if not local_feeds:
+            print("[RECOMMENDATIONS] Local feeds module not available")
+        if is_circuit_open('local_feeds'):
+            print("[RECOMMENDATIONS] Local feeds circuit breaker open, skipping")
+    
+    # Step 4: Merge, deduplicate and rank results
+    if all_items:
+        print(f"[RECOMMENDATIONS] Merging {len(all_items)} items from {len(sources_succeeded)} sources")
+        
+        # Filter by user preferences
+        filtered_items = []
+        print(f"[RECOMMENDATIONS] Filtering {len(all_items)} items, max_travel={get_max_travel_time(travel_time_ranges)}, max_radius={get_max_radius_miles(travel_time_ranges)}")
+        for item in all_items:
+            # Apply travel time filter
+            travel_time = item.get('travel_time_min')
+            if travel_time and isinstance(travel_time, (int, float)):
+                max_travel = get_max_travel_time(travel_time_ranges)
+                if travel_time > max_travel:
+                    continue
+            
+            # Apply distance filter  
+            distance = item.get('distance_miles')
+            if distance and isinstance(distance, (int, float)):
+                max_radius = get_max_radius_miles(travel_time_ranges) 
+                if distance > max_radius:
+                    continue
+            
+            # Apply deduplication
+            place_id = item.get('place_id')
+            if place_id and should_dedup(place_id, user_id, prefs):
+                continue
+            
+            filtered_items.append(item)
+        
+        print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
+        
+        # Rank by mix of places vs events (aim for ~60% places, ~40% events)
+        places = [item for item in filtered_items if item.get('type') == 'place']
+        events = [item for item in filtered_items if item.get('type') == 'event']
+        
+        # Take top items with desired mix
+        final_items = []
+        places_target = min(5, len(places))  # Up to 5 places
+        events_target = min(3, len(events))  # Up to 3 events
+        
+        # Sort by rating/relevance
+        places.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
+        events.sort(key=lambda x: -(x.get('distance_miles') or 100))  # Events by proximity
+        
+        final_items.extend(places[:places_target])
+        final_items.extend(events[:events_target])
+        
+        # If we need more items, fill from remaining
+        remaining_needed = 8 - len(final_items)
+        if remaining_needed > 0:
+            remaining = [item for item in filtered_items if item not in final_items]
+            remaining.sort(key=lambda x: (x.get('rating', 0), -(x.get('distance_miles') or 100)), reverse=True)
+            final_items.extend(remaining[:remaining_needed])
+        
+        # Cache successful results
+        if final_items:
+            cache_expiry = datetime.now() + timedelta(hours=1)
+            db.cache_recommendations(user_id, cache_key, final_items, cache_expiry.isoformat())
+            print(f"[RECOMMENDATIONS] Cached {len(final_items)} items")
+        
+        return final_items, sources_succeeded
+    
+    # Step 5: If all live sources failed, try cached results
+    if cached_items:
+        print(f"[RECOMMENDATIONS] All live sources failed, returning {len(cached_items)} cached items")
+        return cached_items, ['cache']
+    
+    # Step 6: Last resort - return enriched mock data
+    print("[RECOMMENDATIONS] No live sources or cache, falling back to mock data")
+    mock_items = get_enriched_mock_data(prefs, user_id, user_lat, user_lng)
+    return mock_items, ['mock']
+
+
+def get_google_places_recommendations(prefs, user_id, user_lat, user_lng):
+    """Get recommendations from Google Places API based on user preferences."""
+    if not GOOGLE_PLACES_API_KEY:
+        return []
+    
+    items = []
+    categories = prefs.get('categories', ['parks', 'museums', 'attractions'])
+    travel_time_ranges = prefs.get('travel_time_ranges', ['15-30'])
+    max_radius_miles = get_max_radius_miles(travel_time_ranges)
+    radius_meters = min(int(max_radius_miles * 1609), 50000)  # Convert to meters, max 50km
+    
+    location = {'lat': user_lat, 'lng': user_lng}
+    
+    # Search each category
+    for category in categories[:3]:  # Limit to 3 categories to avoid rate limits
+        places = search_google_places(location, category, radius_meters)
+        if places:
+            for i, place in enumerate(places[:3]):  # Top 3 per category
+                item = convert_google_place_to_item(place, location, len(items))
+                
+                # Apply kid_friendly filter if needed
+                if prefs.get('kid_friendly') and not item.get('kid_friendly'):
+                    continue
+                
+                # Apply budget filter
+                budget = prefs.get('budget', 'moderate')
+                if budget == 'free' and item.get('price_flag') != 'free':
+                    continue
+                
+                items.append(item)
+    
+    return items
+
+
+def get_enriched_mock_data(prefs, user_id, user_lat, user_lng):
+    """Return mock data enriched with correct distances/travel times from user location."""
+    mock_items = []
+    categories = prefs.get('categories', ['parks', 'museums', 'attractions'])
+    travel_time_ranges = prefs.get('travel_time_ranges', ['15-30'])
+    max_travel = get_max_travel_time(travel_time_ranges)
+    max_radius = get_max_radius_miles(travel_time_ranges)
+    
+    week = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
+    
+    for i, place in enumerate(MOCK_PLACES):
+        # Apply category filter
+        if categories and place['category'] not in categories:
+            continue
+        
+        # Apply deduplication 
+        if should_dedup(place['place_id'], user_id, prefs):
+            continue
+        
+        # Compute actual distance and travel time from user location
+        enriched_place = _place_with_distance_from_user(place, user_lat, user_lng)
+        
+        # Apply distance/time filters
+        if enriched_place['distance_miles'] > max_radius:
+            continue
+        if enriched_place.get('travel_time_min', 0) > max_travel:
+            continue
+        
+        # Apply kid_friendly filter
+        if prefs.get('kid_friendly') and not enriched_place.get('kid_friendly'):
+            continue
+        
+        # Convert to recommendation format
+        rec_id = f"mock_{user_id}_{week}_{len(mock_items)}"
+        google_maps_url = enriched_place.get('google_maps_url') or f"https://www.google.com/maps/search/?api=1&query={enriched_place['lat']},{enriched_place['lng']}"
+        
+        item = {
+            "rec_id": rec_id,
+            "type": "place",
+            "place_id": enriched_place['place_id'],
+            "title": enriched_place['name'],
+            "category": enriched_place['category'],
+            "distance_miles": enriched_place['distance_miles'],
+            "travel_time_min": enriched_place['travel_time_min'],
+            "price_flag": enriched_place['price_flag'],
+            "kid_friendly": enriched_place.get('kid_friendly', False),
+            "indoor_outdoor": enriched_place.get('indoor_outdoor', 'outdoor'),
+            "explanation": f"Because you like {enriched_place['category']} and it's {enriched_place['travel_time_min']} min away",
+            "source_url": google_maps_url,
+            "google_maps_url": google_maps_url,
+            "address": enriched_place['address'],
+            "rating": enriched_place.get('rating', 4.0),
+            "total_ratings": enriched_place.get('total_ratings', 0),
+            "photo_url": enriched_place.get('photo_url')
+        }
+        
+        mock_items.append(item)
+        
+        if len(mock_items) >= 8:
+            break
+    
+    # Track as recently recommended
+    for item in mock_items:
+        db.add_recent_recommendation(user_id, item['place_id'], item['rec_id'], week)
+    
+    return mock_items
+
+
 def should_dedup(place_id, user_id, prefs):
     """Check if a place should be deduplicated"""
     # Check explicit "already been"
@@ -633,7 +975,7 @@ def filter_places(prefs, user_id, user_lat=None, user_lng=None):
 @app.route('/v1/digest', methods=['GET'])
 @require_auth
 def get_digest():
-    """Get activity digest for current week"""
+    """Get activity digest for current week using new recommendation engine with fallback chain"""
     user_id = get_user_id()
     prefs = db.get_preferences(user_id) or {}
     
@@ -646,71 +988,48 @@ def get_digest():
             "kid_friendly": True,
             "budget": {"min": 0, "max": 50},
             "time_windows": ["SAT_AM", "SAT_PM", "SUN_AM", "SUN_PM"],
+            "travel_time_ranges": ["15-30"],
             "notification_time_local": "16:00",
             "dedup_window_days": 365,
             "calendar_dedup_opt_in": False
         }
     
     # Debug logging
-    print(f"[DEBUG] User ID: {user_id}")
-    print(f"[DEBUG] Preferences: {prefs}")
-    print(f"[DEBUG] Categories: {prefs.get('categories', [])}")
+    print(f"[DIGEST] User ID: {user_id}")
+    print(f"[DIGEST] Categories: {prefs.get('categories', [])}")
     
     # Get current week
     now = datetime.now()
     week = f"{now.year}-{now.isocalendar()[1]:02d}"
     
-    # Resolve user location so distance/time match their ZIP or address
-    home = prefs.get('home_location') or {}
-    user_lat, user_lng = resolve_user_location(home)
-    print(f"[DEBUG] User location: {home.get('formatted_address') or home.get('input')} -> ({user_lat}, {user_lng})")
-    
-    # Filter and rank places (distance/travel_time computed from user location)
-    places = filter_places(prefs, user_id, user_lat, user_lng)
-    print(f"[DEBUG] Filtered places count: {len(places)}")
-    
-    # Format recommendations
-    items = []
-    for i, place in enumerate(places):
-        rec_id = f"r_{user_id}_{week}_{i}"
-        google_maps_url = place.get('google_maps_url') or f"https://www.google.com/maps/search/?api=1&query={place['lat']},{place['lng']}"
+    # Get recommendations using new engine with fallback chain
+    try:
+        items, sources = get_recommendations(user_id, prefs)
         
-        items.append({
-            "rec_id": rec_id,
-            "type": "place",
-            "place_id": place['place_id'],
-            "title": place['name'],
-            "category": place['category'],
-            "distance_miles": place['distance_miles'],
-            "travel_time_min": place['travel_time_min'],
-            "price_flag": place['price_flag'],
-            "kid_friendly": place['kid_friendly'],
-            "indoor_outdoor": place['indoor_outdoor'],
-            "explanation": f"Because you like {place['category']} and it's {place['travel_time_min']} min away",
-            "source_url": google_maps_url,
-            "google_maps_url": google_maps_url,
-            "address": place['address'],
-            "rating": place.get('rating', 4.0),
-            "total_ratings": place.get('total_ratings', 0),
-            "photo_url": place.get('photo_url')
+        response_data = {
+            "week": week,
+            "generated_at": datetime.now().isoformat(),
+            "items": items,
+            "sources": sources,  # Show which sources were used
+            "from_cache": 'cache' in sources
+        }
+        
+        print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)}")
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        print(f"[DIGEST] Error in recommendation engine: {e}")
+        traceback.print_exc()
+        # Emergency fallback - return empty result with error info
+        return jsonify({
+            "week": week,
+            "generated_at": datetime.now().isoformat(),
+            "items": [],
+            "sources": ['error'],
+            "error": str(e),
+            "from_cache": False
         })
-        
-        # Track as recently recommended
-        db.add_recent_recommendation(user_id, place['place_id'], rec_id, week)
-    
-    response_data = {
-        "week": week,
-        "generated_at": datetime.now().isoformat(),
-        "items": items
-    }
-    
-    print(f"[DEBUG] Returning {len(items)} items")
-    if len(items) == 0:
-        print(f"[DEBUG] WARNING: No items to return!")
-        print(f"[DEBUG] Available categories in MOCK_PLACES: {set(p['category'] for p in MOCK_PLACES)}")
-        print(f"[DEBUG] Requested categories: {prefs.get('categories', [])}")
-    
-    return jsonify(response_data)
 
 # ========== GOOGLE PLACES API INTEGRATION ==========
 
@@ -833,16 +1152,29 @@ def calculate_distance(lat1, lng1, lat2, lng2):
     return R * c
 
 
+_nominatim_rate_limited = False  # Skip Nominatim when rate-limited
+
 def geocode_to_lat_lng(query):
     """Resolve ZIP code or address to lat/lng using OpenStreetMap Nominatim (no API key)."""
+    global _nominatim_rate_limited
     import re
     query = (query or "").strip()
     if not query:
         return None
+    # Detect raw lat/lng coordinates (e.g. "37.7922, -122.4583")
+    coord_match = re.match(r'^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$', query)
+    if coord_match:
+        lat, lng = float(coord_match.group(1)), float(coord_match.group(2))
+        if -90 <= lat <= 90 and -180 <= lng <= 180:
+            print(f"[GEOCODE] Detected coordinates: ({lat}, {lng})")
+            geocode_cache[query.lower()] = (lat, lng)
+            return (lat, lng)
+
     cache_key = query.lower()
     if cache_key in geocode_cache:
-        print(f"[GEOCODE] Cache hit for '{query}'")
-        return geocode_cache[cache_key]
+        cached = geocode_cache[cache_key]
+        print(f"[GEOCODE] Cache hit for '{query}' -> {cached}")
+        return cached
     try:
         # Determine the search query
         if query.isdigit() and len(query) == 5:
@@ -855,17 +1187,62 @@ def geocode_to_lat_lng(query):
         else:
             q = query
         
+        # Fast path: common Bay Area cities (avoids Nominatim entirely)
+        _KNOWN_LOCATIONS = {
+            "san francisco": (37.7749, -122.4194),
+            "san francisco, california": (37.7749, -122.4194),
+            "san francisco, ca": (37.7749, -122.4194),
+            "oakland": (37.8044, -121.9712),
+            "oakland, ca": (37.8044, -121.9712),
+            "berkeley": (37.8716, -122.2727),
+            "berkeley, ca": (37.8716, -122.2727),
+            "fremont": (37.5485, -121.9886),
+            "fremont, ca": (37.5485, -121.9886),
+            "newark": (37.5316, -122.0392),
+            "newark, ca": (37.5316, -122.0392),
+            "san jose": (37.3382, -121.8863),
+            "san jose, ca": (37.3382, -121.8863),
+            "palo alto": (37.4419, -122.1430),
+            "palo alto, ca": (37.4419, -122.1430),
+            "mountain view": (37.3861, -122.0839),
+            "mountain view, ca": (37.3861, -122.0839),
+            "sunnyvale": (37.3688, -122.0363),
+            "sunnyvale, ca": (37.3688, -122.0363),
+            "hayward": (37.6688, -122.0808),
+            "hayward, ca": (37.6688, -122.0808),
+            "union city": (37.5934, -122.0438),
+            "union city, ca": (37.5934, -122.0438),
+        }
+        known_key = cache_key.replace(", usa", "").replace(",usa", "").strip()
+        if known_key in _KNOWN_LOCATIONS:
+            result = _KNOWN_LOCATIONS[known_key]
+            geocode_cache[cache_key] = result
+            print(f"[GEOCODE] Known location: '{query}' -> {result}")
+            return result
+
+        if _nominatim_rate_limited:
+            print(f"[GEOCODE] Skipping Nominatim (rate-limited) for '{q}'")
+            geocode_cache[cache_key] = None
+            return None
+
         print(f"[GEOCODE] Searching for: '{q}'")
         url = "https://nominatim.openstreetmap.org/search"
-        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=10)
+        r = requests.get(url, params={"q": q, "format": "json", "limit": 1}, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=4)
         
+        if r.status_code == 429:
+            print(f"[GEOCODE] Rate limited for '{q}' - skipping Nominatim for remaining items")
+            _nominatim_rate_limited = True
+            geocode_cache[cache_key] = None
+            return None
         if r.status_code != 200:
             print(f"[GEOCODE] HTTP {r.status_code} for '{q}'")
+            geocode_cache[cache_key] = None
             return None
         
         data = r.json()
         if not data:
             print(f"[GEOCODE] No results for '{q}'")
+            geocode_cache[cache_key] = None
             return None
         
         lat = float(data[0]["lat"])
@@ -1026,8 +1403,6 @@ def get_feeds_config():
         sources.append({"type": "facebook", "label": "Facebook Local"})
     if config.get("eventbrite_token"):
         sources.append({"type": "eventbrite", "label": "Eventbrite"})
-    if config.get("manus_api_key"):
-        sources.append({"type": "manus", "label": "Manus (personalized local feed)"})
     return jsonify({"enabled": True, "sources": sources})
 
 
@@ -1035,57 +1410,74 @@ def get_feeds_config():
 
 @app.route('/v1/recommendations/ai', methods=['POST'])
 def get_ai_recommendations():
-    """Get Manus-powered recommendations based on user profile (Manus only)."""
+    """Get AI-powered recommendations with caching and fallback support."""
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
     
-    # Get user_id for deduplication
+    # Get user_id for deduplication and caching
     user_id = get_user_id()
     
     print(f"[AI] Received recommendation request for user: {user_id}")
     print(f"[AI] User profile: {json.dumps(profile, indent=2)}")
-    print(f"[AI] Prompt length: {len(prompt)} chars")
     
-    if not local_feeds:
-        return jsonify({"error": "Manus/local feeds module not available on server"}), 500
-
-    config = local_feeds.get_local_feed_config()
-    if not config.get("manus_api_key"):
-        return jsonify({"error": "MANUS_API_KEY is not configured on the backend"}), 400
-
-    items = []
-    source = "manus"
-    try:
-        user_lat, user_lng = resolve_user_location(profile.get("location"))
-        travel_times = profile.get("travel_time_ranges", ["15-30"])
-        max_travel = get_max_travel_time(travel_times)
-        max_radius_miles = get_max_radius_miles(travel_times)
-        week_str = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
-
-        # Fetch recommendations from all local feed sources
-        items = local_feeds.get_local_feed_recommendations(
-            profile, user_lat, user_lng,
-            geocode_fn=geocode_to_lat_lng,
-            max_items=15,  # Return up to 15 ranked recommendations
-            max_travel_min=max_travel,
-            max_radius_miles=max_radius_miles,
-            week_str=week_str,
-        )
-        print(f"[AI] Got {len(items)} recommendations from Manus/local feeds")
-    except Exception as e:
-        print(f"[AI] Manus/local feeds error: {e}")
-        return jsonify({"error": "Failed to generate recommendations from Manus"}), 500
-    
-    response_data = {
-        "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
-        "generated_at": datetime.now().isoformat(),
-        "ai_powered": True,
-        "source": source,
-        "items": items
+    # Convert profile to preferences format for compatibility with main engine
+    prefs = {
+        'home_location': profile.get('location', {}),
+        'categories': [],  # Will be derived from interests
+        'group_type': profile.get('group_type'),
+        'interests': profile.get('interests', []),
+        'energy_level': profile.get('energy_level'),
+        'budget': profile.get('budget'),
+        'travel_time_ranges': profile.get('travel_time_ranges', ['15-30']),
+        'kid_friendly': profile.get('kid_friendly', False)
     }
     
-    return jsonify(response_data)
+    # Map interests to categories for filtering
+    interest_to_category = {
+        'nature': ['parks'],
+        'arts_culture': ['museums'],
+        'food_drinks': ['food'],
+        'adventure': ['attractions'],
+        'learning': ['museums'],
+        'entertainment': ['attractions'],
+        'relaxation': ['parks'],
+        'shopping': ['attractions'],
+        'events': ['events']
+    }
+    
+    categories = []
+    for interest in prefs.get('interests', []):
+        categories.extend(interest_to_category.get(interest, []))
+    prefs['categories'] = list(set(categories)) or ['parks', 'museums', 'attractions']
+    
+    try:
+        # Use the same recommendation engine with fallback chain
+        items, sources = get_recommendations(user_id, prefs)
+        
+        response_data = {
+            "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
+            "generated_at": datetime.now().isoformat(),
+            "ai_powered": True,
+            "sources": sources,
+            "items": items,
+            "from_cache": 'cache' in sources
+        }
+        
+        print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)}")
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"[AI] Error in AI recommendations: {e}")
+        return jsonify({
+            "error": "Failed to generate AI recommendations", 
+            "details": str(e),
+            "week": f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}",
+            "generated_at": datetime.now().isoformat(),
+            "ai_powered": True,
+            "sources": ['error'],
+            "items": []
+        }), 500
 
 
 def generate_recommendations_from_google_places(profile, user_id=None):
@@ -2655,6 +3047,35 @@ def user_digest_preferences():
         "message": f"Digest emails {'enabled' if enabled else 'disabled'}",
         "digest_enabled": enabled
     })
+
+
+@app.route('/v1/status', methods=['GET'])
+def api_status():
+    """API status endpoint with circuit breaker information"""
+    from datetime import datetime
+    
+    status = {
+        "status": "ok", 
+        "service": "activity-planner-api",
+        "timestamp": datetime.now().isoformat(),
+        "features": {
+            "google_places": bool(GOOGLE_PLACES_API_KEY),
+            "local_feeds": bool(local_feeds),
+            "caching": True
+        },
+        "circuit_breakers": {}
+    }
+    
+    # Add circuit breaker status
+    for source, cb_data in _circuit_breakers.items():
+        status["circuit_breakers"][source] = {
+            "failures": cb_data.get('failures', 0),
+            "total_calls": cb_data.get('total_calls', 0),
+            "last_failure": cb_data.get('last_failure').isoformat() if cb_data.get('last_failure') else None,
+            "circuit_open": is_circuit_open(source)
+        }
+    
+    return jsonify(status)
 
 
 @app.route('/health', methods=['GET'])

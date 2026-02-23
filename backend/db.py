@@ -93,6 +93,19 @@ def init_db():
                 email TEXT NOT NULL,
                 expires_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS cached_recommendations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                cache_key TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE(user_id, cache_key),
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cached_recs_user ON cached_recommendations(user_id);
+            CREATE INDEX IF NOT EXISTS idx_cached_recs_expires ON cached_recommendations(expires_at);
         """)
     # Add email_verified column if missing (migration for existing DBs)
     with get_conn() as c:
@@ -448,3 +461,65 @@ def get_all_users_with_preferences():
         })
     
     return result
+
+
+# ---------- Cached recommendations ----------
+
+def cache_recommendations(user_id, cache_key, items, expires_at=None):
+    """Cache recommendations for a user."""
+    from datetime import datetime, timedelta
+    
+    now = datetime.now()
+    expires_at = expires_at or (now + timedelta(hours=1)).isoformat()
+    
+    items_json = json.dumps(items)
+    
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO cached_recommendations (user_id, cache_key, items_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id, cache_key) DO UPDATE SET items_json = ?, created_at = ?, expires_at = ?",
+            (user_id, cache_key, items_json, now.isoformat(), expires_at, items_json, now.isoformat(), expires_at)
+        )
+
+
+def get_cached_recommendations(user_id, cache_key):
+    """Get cached recommendations for a user if they haven't expired."""
+    from datetime import datetime
+    
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT items_json, created_at, expires_at FROM cached_recommendations WHERE user_id = ? AND cache_key = ?",
+            (user_id, cache_key)
+        ).fetchone()
+    
+    if not row:
+        return None
+    
+    # Check if expired
+    try:
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        if datetime.now() > expires_at:
+            # Clean up expired entry
+            with get_conn() as c:
+                c.execute("DELETE FROM cached_recommendations WHERE user_id = ? AND cache_key = ?", (user_id, cache_key))
+            return None
+    except (ValueError, TypeError):
+        return None
+    
+    try:
+        items = json.loads(row["items_json"])
+        return {
+            "items": items,
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"]
+        }
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def clean_expired_cache():
+    """Clean up expired cached recommendations."""
+    from datetime import datetime
+    
+    now = datetime.now().isoformat()
+    with get_conn() as c:
+        c.execute("DELETE FROM cached_recommendations WHERE expires_at < ?", (now,))
