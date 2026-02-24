@@ -2258,7 +2258,7 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
         _fetch_tripadvisor,
     ]
     # Early return: stop waiting after 5s so we return fast with available results.
-    FETCH_TIMEOUT = 5
+    FETCH_TIMEOUT = 4
     with ThreadPoolExecutor(max_workers=min(4, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
         try:

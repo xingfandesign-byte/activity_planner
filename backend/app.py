@@ -378,7 +378,7 @@ def reverse_geocode():
             url, 
             params={"lat": lat, "lon": lng, "format": "json"},
             headers={"User-Agent": "ActivityPlanner/1.0"},
-            timeout=10
+            timeout=5
         )
         
         if r.status_code == 200:
@@ -647,7 +647,7 @@ def image_search():
                     "num": 3,
                     "safe": "active",
                 },
-                timeout=8,
+                timeout=3,
             )
             if r.status_code == 200:
                 data = r.json()
@@ -666,7 +666,7 @@ def image_search():
                 pexels_url,
                 params={"query": query, "per_page": 3},
                 headers={"Authorization": PEXELS_API_KEY},
-                timeout=8,
+                timeout=3,
             )
             if r.status_code == 200:
                 data = r.json()
@@ -687,7 +687,7 @@ def image_search():
                 unsplash_url,
                 params={"query": query, "per_page": 3},
                 headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
-                timeout=8,
+                timeout=3,
             )
             if r.status_code == 200:
                 data = r.json()
@@ -1074,38 +1074,23 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
     sources_succeeded = []
     sources_failed = []
     
-    # Step 2: Try Google Places API (if key configured and not circuit broken)
-    if GOOGLE_PLACES_API_KEY and not is_circuit_open('google_places'):
-        print("[RECOMMENDATIONS] Trying Google Places API...")
-        sources_tried.append('google_places')
-        
+    # Steps 2 & 3: Fetch Google Places + local feeds in PARALLEL
+    import concurrent.futures as _cf
+
+    def _fetch_google_places():
+        if not GOOGLE_PLACES_API_KEY or is_circuit_open('google_places'):
+            return 'google_places', [], not GOOGLE_PLACES_API_KEY
         try:
-            places_items = get_google_places_recommendations(prefs, user_id, user_lat, user_lng)
-            if places_items:
-                all_items.extend(places_items)
-                sources_succeeded.append('google_places')
-                record_success('google_places')
-                print(f"[RECOMMENDATIONS] Google Places: {len(places_items)} items")
-            else:
-                record_failure('google_places')
-                sources_failed.append('google_places')
+            items = get_google_places_recommendations(prefs, user_id, user_lat, user_lng)
+            return 'google_places', items or [], False
         except Exception as e:
             print(f"[RECOMMENDATIONS] Google Places error: {e}")
-            record_failure('google_places')
-            sources_failed.append('google_places')
-    else:
-        if not GOOGLE_PLACES_API_KEY:
-            print("[RECOMMENDATIONS] Google Places API key not configured")
-        if is_circuit_open('google_places'):
-            print("[RECOMMENDATIONS] Google Places circuit breaker open, skipping")
-    
-    # Step 3: Try local feeds (if not circuit broken)
-    if local_feeds and not is_circuit_open('local_feeds'):
-        print("[RECOMMENDATIONS] Trying local feeds...")
-        sources_tried.append('local_feeds')
-        
+            return 'google_places', [], True
+
+    def _fetch_local():
+        if not local_feeds or is_circuit_open('local_feeds'):
+            return 'local_feeds', [], not local_feeds
         try:
-            # Build profile for local feeds
             profile = {
                 'location': home_location,
                 'group_type': prefs.get('group_type'),
@@ -1115,39 +1100,37 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
                 'travel_time_ranges': travel_time_ranges,
                 'kid_friendly': kid_friendly
             }
-            
             max_travel_min = get_max_travel_time(travel_time_ranges)
             max_radius_miles = get_max_radius_miles(travel_time_ranges)
             week_str = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
-            
-            local_items = local_feeds.get_local_feed_recommendations(
-                profile=profile,
-                user_lat=user_lat,
-                user_lng=user_lng,
-                geocode_fn=geocode_to_lat_lng,
-                max_items=20,
-                max_travel_min=max_travel_min,
-                max_radius_miles=max_radius_miles,
+            items = local_feeds.get_local_feed_recommendations(
+                profile=profile, user_lat=user_lat, user_lng=user_lng,
+                geocode_fn=geocode_to_lat_lng, max_items=20,
+                max_travel_min=max_travel_min, max_radius_miles=max_radius_miles,
                 week_str=week_str
             )
-            
-            if local_items:
-                all_items.extend(local_items)
-                sources_succeeded.append('local_feeds')
-                record_success('local_feeds')
-                print(f"[RECOMMENDATIONS] Local feeds: {len(local_items)} items")
-            else:
-                record_failure('local_feeds')
-                sources_failed.append('local_feeds')
+            return 'local_feeds', items or [], False
         except Exception as e:
             print(f"[RECOMMENDATIONS] Local feeds error: {e}")
-            record_failure('local_feeds')
-            sources_failed.append('local_feeds')
-    else:
-        if not local_feeds:
-            print("[RECOMMENDATIONS] Local feeds module not available")
-        if is_circuit_open('local_feeds'):
-            print("[RECOMMENDATIONS] Local feeds circuit breaker open, skipping")
+            return 'local_feeds', [], True
+
+    print("[RECOMMENDATIONS] Fetching Google Places + local feeds in parallel...")
+    with _cf.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(_fetch_google_places), executor.submit(_fetch_local)]
+        for future in _cf.as_completed(futures, timeout=3):
+            try:
+                source_name, items, had_error = future.result()
+                sources_tried.append(source_name)
+                if items:
+                    all_items.extend(items)
+                    sources_succeeded.append(source_name)
+                    record_success(source_name)
+                    print(f"[RECOMMENDATIONS] {source_name}: {len(items)} items")
+                elif had_error:
+                    record_failure(source_name)
+                    sources_failed.append(source_name)
+            except Exception as e:
+                print(f"[RECOMMENDATIONS] Parallel fetch error: {e}")
     
     # Step 4: Merge, deduplicate and rank results
     if all_items:
@@ -1235,17 +1218,25 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         # Score and rank all items together
         def _item_score(item):
             score = 0
-            # Strong bonus for items with distance data
-            if item.get('distance_miles') is not None:
-                score += 30
-                # Closer items score higher
-                d = item.get('distance_miles', 50)
-                if d <= 5:
-                    score += 15
+            # Distance is the primary ranking factor — closer is much better
+            d = item.get('distance_miles')
+            if d is not None:
+                # Continuous distance penalty: max 50 points for 0 miles, drops off
+                if d <= 3:
+                    score += 50
+                elif d <= 5:
+                    score += 40
                 elif d <= 10:
+                    score += 30
+                elif d <= 15:
+                    score += 20
+                elif d <= 25:
                     score += 10
-                elif d <= 20:
-                    score += 5
+                else:
+                    score += max(0, 5 - int(d / 20))
+            else:
+                # No distance data — slight penalty to rank below known-nearby items
+                score -= 5
             # Rating bonus
             score += (item.get('rating', 0) or 0) * 5
             # Events with dates are more actionable
@@ -1583,7 +1574,7 @@ def search_google_places(location, category, radius_meters=10000):
         }
         
         print(f"[PLACES API] Searching for {category} near {params['location']}")
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
         if data.get('status') == 'OK':
@@ -1626,7 +1617,7 @@ def get_place_details(place_id):
             'key': GOOGLE_PLACES_API_KEY
         }
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
         if data.get('status') == 'OK':
@@ -3050,7 +3041,7 @@ def google_callback():
         userinfo_response = requests.get(
             'https://www.googleapis.com/oauth2/v2/userinfo',
             headers={'Authorization': f'Bearer {access_token}'},
-            timeout=10
+            timeout=5
         )
         userinfo = userinfo_response.json()
         
@@ -3225,7 +3216,7 @@ def create_calendar_event():
                 'Content-Type': 'application/json'
             },
             json=event,
-            timeout=10
+            timeout=5
         )
         
         if response.ok:
