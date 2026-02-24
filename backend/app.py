@@ -849,15 +849,21 @@ def _refresh_recommendations_background(user_id, prefs, cache_key):
                 'timestamp': datetime.now()
             }
             print(f"[WARM_CACHE] Background refresh done: {len(items)} items for key {cache_key}")
+        else:
+            # Refresh returned nothing — evict stale cache so next request fetches live
+            _warm_cache.pop(cache_key, None)
+            print(f"[WARM_CACHE] Background refresh returned empty — evicted cache")
     except Exception as e:
         print(f"[WARM_CACHE] Background refresh error: {e}")
+        # Evict cache on error so next request tries live fetch
+        _warm_cache.pop(cache_key, None)
     finally:
         _background_refresh_in_progress.discard(cache_key)
 
 
-# Warm cache TTL: serve from cache if < 15 min old, trigger background refresh if > 5 min old
-WARM_CACHE_FRESH_SECONDS = 300   # 5 min: fully fresh, no refresh needed
-WARM_CACHE_STALE_SECONDS = 900   # 15 min: stale but serveable, trigger background refresh
+# Warm cache TTL: serve from cache if < 10 min old, trigger background refresh if > 3 min old
+WARM_CACHE_FRESH_SECONDS = 180   # 3 min: fully fresh, no refresh needed
+WARM_CACHE_STALE_SECONDS = 600   # 10 min: stale but serveable, trigger background refresh
 
 
 def get_recommendations(user_id, prefs):
@@ -1286,7 +1292,7 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         
         # Cache successful results
         if final_items:
-            cache_expiry = datetime.now() + timedelta(hours=1)
+            cache_expiry = datetime.now() + timedelta(minutes=30)
             db.cache_recommendations(user_id, cache_key, final_items, cache_expiry.isoformat())
             print(f"[RECOMMENDATIONS] Cached {len(final_items)} items")
         
