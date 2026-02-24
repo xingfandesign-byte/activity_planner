@@ -1218,17 +1218,25 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         # Score and rank all items together
         def _item_score(item):
             score = 0
-            # Strong bonus for items with distance data
-            if item.get('distance_miles') is not None:
-                score += 30
-                # Closer items score higher
-                d = item.get('distance_miles', 50)
-                if d <= 5:
-                    score += 15
+            # Distance is the primary ranking factor — closer is much better
+            d = item.get('distance_miles')
+            if d is not None:
+                # Continuous distance penalty: max 50 points for 0 miles, drops off
+                if d <= 3:
+                    score += 50
+                elif d <= 5:
+                    score += 40
                 elif d <= 10:
+                    score += 30
+                elif d <= 15:
+                    score += 20
+                elif d <= 25:
                     score += 10
-                elif d <= 20:
-                    score += 5
+                else:
+                    score += max(0, 5 - int(d / 20))
+            else:
+                # No distance data — slight penalty to rank below known-nearby items
+                score -= 5
             # Rating bonus
             score += (item.get('rating', 0) or 0) * 5
             # Events with dates are more actionable
