@@ -1431,14 +1431,9 @@ def should_dedup(place_id, user_id, prefs):
             if datetime.now() - visited_at < dedup_window:
                 return True
     
-    # Check recently recommended (last 4 weeks)
-    recent = db.get_recent_recommendations_list(user_id)
-    four_weeks_ago = datetime.now() - timedelta(weeks=4)
-    for rec in recent:
-        if rec.get('place_id') == place_id:
-            rec_at = datetime.fromisoformat(rec['recommended_at'])
-            if rec_at > four_weeks_ago:
-                return True
+    # Note: previously filtered recently recommended places (last 4 weeks),
+    # but this was too aggressive and reduced result count. Removed — users
+    # should see good places repeatedly. Only visited/been-there dedup remains.
     
     return False
 
