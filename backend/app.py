@@ -1208,8 +1208,12 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
             if place_id:
                 seen_place_ids.add(place_id)
 
-            # Fuzzy title deduplication (normalize to lowercase, strip punctuation/whitespace)
+            # Filter test/draft items
             title = item.get('title') or item.get('name') or ''
+            if re.match(r'^test\s*[-–—:]', title, re.IGNORECASE):
+                continue
+
+            # Fuzzy title deduplication (normalize to lowercase, strip punctuation/whitespace)
             title_key = re.sub(r'[^a-z0-9]', '', title.lower())
             if title_key and title_key in seen_title_keys:
                 dedup_count += 1
