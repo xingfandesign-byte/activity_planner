@@ -905,6 +905,10 @@ def _is_low_quality_item(item):
     if alpha_count < len(title) * 0.3 and len(title) > 5:
         return True
     
+    # Test/draft items
+    if re.match(r'^test\s*[-–—:]', title_lower):
+        return True
+
     # Spam patterns
     spam_patterns = [
         r'^(ad|sponsored|advertisement)',

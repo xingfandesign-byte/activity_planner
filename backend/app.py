@@ -12,6 +12,7 @@ from flask_cors import CORS
 from datetime import datetime, timedelta
 import json
 import os
+import re
 import requests
 import hashlib
 import hmac
@@ -1157,6 +1158,9 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         print(f"[RECOMMENDATIONS] Filtering {len(all_items)} items, max_travel={get_max_travel_time(travel_time_ranges)}, max_radius={get_max_radius_miles(travel_time_ranges)}")
         now = datetime.now()
         past_filtered = 0
+        seen_place_ids = set()
+        seen_title_keys = set()
+        dedup_count = 0
         for item in all_items:
             # Filter out past events (on or before query date)
             event_date_str = item.get('event_date')
@@ -1192,15 +1196,37 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
                 if distance > max_radius:
                     continue
             
-            # Apply deduplication
+            # Apply visited-place deduplication
             place_id = item.get('place_id')
             if place_id and should_dedup(place_id, user_id, prefs):
                 continue
+
+            # Cross-source deduplication by place_id
+            if place_id and place_id in seen_place_ids:
+                dedup_count += 1
+                continue
+            if place_id:
+                seen_place_ids.add(place_id)
+
+            # Filter test/draft items
+            title = item.get('title') or item.get('name') or ''
+            if re.match(r'^test\s*[-–—:]', title, re.IGNORECASE):
+                continue
+
+            # Fuzzy title deduplication (normalize to lowercase, strip punctuation/whitespace)
+            title_key = re.sub(r'[^a-z0-9]', '', title.lower())
+            if title_key and title_key in seen_title_keys:
+                dedup_count += 1
+                continue
+            if title_key:
+                seen_title_keys.add(title_key)
             
             filtered_items.append(item)
         
         if past_filtered:
             print(f"[RECOMMENDATIONS] Filtered out {past_filtered} past events")
+        if dedup_count:
+            print(f"[RECOMMENDATIONS] Deduplicated {dedup_count} duplicate items")
         print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
         
         # Get user affinity scores for personalized re-ranking
