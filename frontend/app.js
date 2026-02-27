@@ -11,7 +11,7 @@ let editingPreference = null;
 let onboardingData = {
     group_type: null,
     home_location: null,
-    transportation: ['transit', 'car'],
+    transportation: ['car'],
     departure_times: {
         saturday: ['morning'],
         sunday: ['morning']
@@ -358,74 +358,26 @@ async function initApp() {
 }
 
 function setupEventListeners() {
-    // Step 1: Group type selection
+    // Step 1: Group type selection — show location section after picking
     document.querySelectorAll('#step-1 .selection-card').forEach(card => {
         card.addEventListener('click', () => {
             document.querySelectorAll('#step-1 .selection-card').forEach(c => c.classList.remove('selected'));
             card.classList.add('selected');
             onboardingData.group_type = card.dataset.value;
-            setTimeout(() => goToStep(2), 300);
+            // Reveal location section
+            const locSection = document.getElementById('step1-location');
+            if (locSection) locSection.style.display = 'block';
         });
     });
-    
-    // Step 2a: Location buttons
-    document.getElementById('use-location-btn')?.addEventListener('click', requestCurrentLocation);
-    document.getElementById('manual-location-btn')?.addEventListener('click', () => showSubstep('2b'));
-    
-    // Step 2b: Location type selection
-    document.getElementById('select-zip')?.addEventListener('click', () => {
-        document.getElementById('select-zip').classList.add('selected');
-        document.getElementById('select-address').classList.remove('selected');
-        document.getElementById('zip-input-group').classList.remove('hidden');
-        document.getElementById('address-input-group').classList.add('hidden');
-    });
-    
-    document.getElementById('select-address')?.addEventListener('click', () => {
-        document.getElementById('select-address').classList.add('selected');
-        document.getElementById('select-zip').classList.remove('selected');
-        document.getElementById('address-input-group').classList.remove('hidden');
-        document.getElementById('zip-input-group').classList.add('hidden');
-    });
-    
-    // Step 2d: Multi-select cards
-    document.querySelectorAll('#step-2d .selection-card.selectable').forEach(card => {
-        card.addEventListener('click', () => {
-            card.classList.toggle('selected');
-            updateTransportationPrefs();
-            updateDepartureTimePrefs();
-            updateTravelTimePrefs();
-        });
-    });
-    
-    // Step 3: Interests multi-select
+
+    // Step 1: Location button
+    document.getElementById('use-location-btn')?.addEventListener('click', requestCurrentLocationAndAdvance);
+
+    // Step 2: Interests multi-select
     document.querySelectorAll('#interests-grid .selection-card').forEach(card => {
         card.addEventListener('click', () => {
             card.classList.toggle('selected');
             updateInterests();
-        });
-    });
-    
-    // Step 4: Single-select groups
-    document.querySelectorAll('#step-4 .selection-card[data-group]').forEach(card => {
-        card.addEventListener('click', () => {
-            const group = card.dataset.group;
-            document.querySelectorAll(`#step-4 .selection-card[data-group="${group}"]`).forEach(c => {
-                c.classList.remove('selected');
-            });
-            card.classList.add('selected');
-            if (group === 'energy') onboardingData.energy_level = card.dataset.value;
-            else if (group === 'time') onboardingData.time_commitment = card.dataset.value;
-        });
-    });
-    
-    // Step 5: Budget and checkboxes
-    document.querySelectorAll('#step-5 .selection-card[data-group="budget"]').forEach(card => {
-        card.addEventListener('click', () => {
-            document.querySelectorAll('#step-5 .selection-card[data-group="budget"]').forEach(c => {
-                c.classList.remove('selected');
-            });
-            card.classList.add('selected');
-            onboardingData.budget = card.dataset.value;
         });
     });
     
@@ -459,10 +411,7 @@ function setupEventListeners() {
         if (e.key === 'Enter') document.getElementById('signup-password')?.focus();
     });
     document.getElementById('zip-input')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') submitLocation('zip');
-    });
-    document.getElementById('address-input')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') submitLocation('address');
+        if (e.key === 'Enter') submitZipAndAdvance();
     });
     document.getElementById('forgot-email')?.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') handleForgotPassword();
@@ -921,13 +870,13 @@ async function signupWithEmail(email, password) {
             onboardingData = {
                 group_type: null,
                 home_location: null,
-                transportation: [],
-                departure_times: { saturday: [], sunday: [] },
-                travel_time_ranges: [],
+                transportation: ['car'],
+                departure_times: { saturday: ['morning'], sunday: ['morning'] },
+                travel_time_ranges: ['0-15', '15-30'],
                 interests: [],
-                energy_level: null,
-                time_commitment: null,
-                budget: null,
+                energy_level: 'moderate',
+                time_commitment: 'half_day',
+                budget: 'moderate',
                 accessibility: [],
                 avoid: []
             };
@@ -975,13 +924,13 @@ function simulateSignup(identifier) {
     onboardingData = {
         group_type: null,
         home_location: null,
-        transportation: [],
-        departure_times: { saturday: [], sunday: [] },
-        travel_time_ranges: [],
+        transportation: ['car'],
+        departure_times: { saturday: ['morning'], sunday: ['morning'] },
+        travel_time_ranges: ['0-15', '15-30'],
         interests: [],
-        energy_level: null,
-        time_commitment: null,
-        budget: null,
+        energy_level: 'moderate',
+        time_commitment: 'half_day',
+        budget: 'moderate',
         accessibility: [],
         avoid: []
     };
@@ -1130,16 +1079,9 @@ function initializeOnboarding() {
         step1.style.display = 'block';
     }
     
-    document.querySelectorAll('.substep').forEach(substep => {
-        substep.classList.remove('active');
-        substep.style.display = 'none';
-    });
-    
-    const step2a = document.getElementById('step-2a');
-    if (step2a) {
-        step2a.classList.add('active');
-        step2a.style.display = 'block';
-    }
+    // Hide location section until group is picked
+    const locSection = document.getElementById('step1-location');
+    if (locSection) locSection.style.display = 'none';
     
     document.querySelectorAll('.progress-step').forEach((el, index) => {
         el.classList.remove('active', 'completed');
@@ -1147,8 +1089,8 @@ function initializeOnboarding() {
     });
     
     currentStep = 1;
-    currentSubstep = '2a';
     updateBackButton();
+    updateProgressLabel();
 }
 
 function goToStep(step) {
@@ -1157,7 +1099,7 @@ function goToStep(step) {
         return;
     }
     
-    if (step === 3 && !onboardingData.home_location) {
+    if (step === 2 && !onboardingData.home_location) {
         alert('Please set your location first.');
         return;
     }
@@ -1179,65 +1121,24 @@ function goToStep(step) {
         targetStep.style.display = 'block';
     }
     
-    if (step === 2) {
-        if (onboardingData.home_location) {
-            showSubstep('2d');
-        } else {
-            showSubstep('2a');
-        }
-    }
-    
     currentStep = step;
     updateBackButton();
+    updateProgressLabel();
     document.querySelector('.onboarding-container')?.scrollTo(0, 0);
 }
 
 function showSubstep(substep) {
-    document.querySelectorAll('#step-2 .substep').forEach(el => {
-        el.classList.remove('active');
-        el.style.display = 'none';
-    });
-    
-    const target = document.getElementById(`step-${substep}`);
-    if (target) {
-        target.classList.add('active');
-        target.style.display = 'block';
-    }
-    
-    currentSubstep = substep;
-    updateBackButton();
+    // Legacy — substeps removed in simplified onboarding
+    // Kept for backward compatibility with settings/editAllPreferences
 }
 
 // Global back navigation
 function goBack() {
     if (currentStep === 1) {
-        // First step - no back action (or could go to auth)
         return;
     }
-    
     if (currentStep === 2) {
-        // Handle substep navigation within step 2
-        if (currentSubstep === '2a') {
-            goToStep(1);
-        } else if (currentSubstep === '2b') {
-            showSubstep('2a');
-        } else if (currentSubstep === '2c') {
-            // Go back based on how user entered location
-            if (onboardingData.home_location?.type === 'geolocation') {
-                showSubstep('2a');
-            } else {
-                showSubstep('2b');
-            }
-            onboardingData.home_location = null;
-        } else if (currentSubstep === '2d') {
-            showSubstep('2c');
-        }
-    } else if (currentStep === 3) {
-        goToStep(2);
-    } else if (currentStep === 4) {
-        goToStep(3);
-    } else if (currentStep === 5) {
-        goToStep(4);
+        goToStep(1);
     }
 }
 
@@ -1406,24 +1307,22 @@ function updateInterests() {
     
     const count = onboardingData.interests.length;
     const countEl = document.getElementById('interests-count');
-    const continueBtn = document.getElementById('step3-continue');
+    const continueBtn = document.getElementById('step2-continue');
     
     if (countEl) {
-        countEl.textContent = `${count} selected (minimum 3)`;
-        countEl.style.color = count >= 3 ? '#10b981' : '#666';
+        countEl.textContent = `${count} selected (minimum 1)`;
+        countEl.style.color = count >= 1 ? '#10b981' : '#666';
     }
     
     if (continueBtn) {
-        continueBtn.disabled = count < 3;
+        continueBtn.disabled = count < 1;
     }
 }
 
 // Complete onboarding
 async function completeOnboarding() {
-    onboardingData.accessibility = Array.from(document.querySelectorAll('input[name="accessibility"]:checked'))
-        .map(cb => cb.value);
-    onboardingData.avoid = Array.from(document.querySelectorAll('input[name="avoid"]:checked'))
-        .map(cb => cb.value);
+    // Defaults for removed steps (accessibility/avoid stay empty unless edited in Settings)
+    // transportation, energy_level, time_commitment, budget already have defaults in onboardingData
     
     // Save preferences locally first
     await savePreferences();
@@ -1439,6 +1338,119 @@ async function completeOnboarding() {
 function skipAndComplete() {
     onboardingData.interests = ['nature', 'arts_culture', 'entertainment'];
     completeOnboarding();
+}
+
+// "Show me everything" — select all interests and complete
+function showMeEverything() {
+    const allInterests = ['nature', 'arts_culture', 'food_drinks', 'adventure', 'learning', 'entertainment', 'relaxation', 'shopping', 'events'];
+    onboardingData.interests = allInterests;
+    // Select all cards visually
+    document.querySelectorAll('#interests-grid .selection-card').forEach(card => card.classList.add('selected'));
+    updateInterests();
+    completeOnboarding();
+}
+
+// Skip onboarding entirely — use geolocation + defaults
+function skipOnboarding() {
+    // Set defaults for everything
+    onboardingData.group_type = onboardingData.group_type || 'solo';
+    onboardingData.interests = ['nature', 'arts_culture', 'food_drinks', 'adventure', 'learning', 'entertainment', 'relaxation', 'shopping', 'events'];
+    onboardingData.transportation = ['car'];
+    onboardingData.energy_level = 'moderate';
+    onboardingData.time_commitment = 'half_day';
+    onboardingData.budget = 'moderate';
+    onboardingData.travel_time_ranges = ['0-15', '15-30'];
+
+    // Try geolocation
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                onboardingData.home_location = {
+                    type: 'geolocation',
+                    input: 'Current location',
+                    lat: latitude,
+                    lng: longitude,
+                    formatted_address: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+                    precision: 'exact'
+                };
+                completeOnboarding();
+            },
+            () => {
+                // Geolocation failed — still complete with no location (backend can handle)
+                onboardingData.home_location = { type: 'manual', input: 'Unknown', formatted_address: 'Unknown' };
+                completeOnboarding();
+            },
+            { enableHighAccuracy: false, timeout: 5000 }
+        );
+    } else {
+        onboardingData.home_location = { type: 'manual', input: 'Unknown', formatted_address: 'Unknown' };
+        completeOnboarding();
+    }
+}
+
+// Request location and auto-advance to step 2
+async function requestCurrentLocationAndAdvance() {
+    const btn = document.getElementById('use-location-btn');
+    btn.innerHTML = '<span class="btn-icon">⏳</span><span class="btn-text">Getting location...</span>';
+    btn.disabled = true;
+
+    if (!navigator.geolocation) {
+        alert('Geolocation is not supported by your browser. Please enter a ZIP code.');
+        btn.innerHTML = '<span class="btn-icon">📍</span><span class="btn-text">Use My Location</span>';
+        btn.disabled = false;
+        return;
+    }
+
+    try {
+        const position = await new Promise((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 10000
+            });
+        });
+
+        const { latitude, longitude } = position.coords;
+        onboardingData.home_location = {
+            type: 'geolocation',
+            input: 'Current location',
+            lat: latitude,
+            lng: longitude,
+            formatted_address: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
+            precision: 'exact'
+        };
+
+        // Auto-advance to step 2
+        goToStep(2);
+    } catch (error) {
+        console.error('Geolocation error:', error);
+        alert('Could not get your location. Please enter a ZIP code.');
+        btn.innerHTML = '<span class="btn-icon">📍</span><span class="btn-text">Use My Location</span>';
+        btn.disabled = false;
+    }
+}
+
+// Submit ZIP from step 1 and advance
+function submitZipAndAdvance() {
+    const input = document.getElementById('zip-input').value.trim();
+    if (!/^\d{5}(-\d{4})?$/.test(input)) {
+        alert('Please enter a valid ZIP code');
+        return;
+    }
+    onboardingData.home_location = {
+        type: 'zip',
+        input: input,
+        formatted_address: input,
+        precision: 'approximate'
+    };
+    goToStep(2);
+}
+
+function updateProgressLabel() {
+    const label = document.getElementById('progress-label');
+    if (label) {
+        label.textContent = `Step ${currentStep} of 2`;
+    }
 }
 
 function showSignupPrompt() {
@@ -3515,6 +3527,9 @@ window.goBackFromLocationConfirm = goBackFromLocationConfirm;
 window.handleSaveLocationCheckbox = handleSaveLocationCheckbox;
 window.completeOnboarding = completeOnboarding;
 window.skipAndComplete = skipAndComplete;
+window.showMeEverything = showMeEverything;
+window.skipOnboarding = skipOnboarding;
+window.submitZipAndAdvance = submitZipAndAdvance;
 window.showDashboard = showDashboard;
 window.showRecommendations = showRecommendations;
 window.refreshRecommendations = refreshRecommendations;

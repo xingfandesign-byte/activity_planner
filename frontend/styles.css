@@ -519,6 +519,11 @@ h3 {
     display: block !important;
 }
 
+/* Progress label next to progress bar */
+.progress-label {
+    white-space: nowrap;
+}
+
 @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
