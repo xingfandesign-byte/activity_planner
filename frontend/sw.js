@@ -1,5 +1,5 @@
 // Service Worker for Activity Planner PWA
-const CACHE_NAME = 'activity-planner-v1';
+const CACHE_NAME = 'activity-planner-v2';
 const STATIC_ASSETS = [
   '/index.html',
   '/styles.css',

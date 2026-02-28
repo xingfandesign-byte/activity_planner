@@ -178,26 +178,26 @@
         <!-- First-Time Onboarding Screen -->
         <div id="onboarding" class="screen">
             <div class="container onboarding-container">
+                <!-- Skip link -->
+                <div style="text-align: right; margin-bottom: 0.5rem;">
+                    <a href="#" onclick="skipOnboarding(); return false;" class="btn-link" style="font-size: 0.9rem; margin: 0; display: inline;">Skip → use my location &amp; show everything</a>
+                </div>
+
                 <!-- Progress Indicator with Back Button -->
                 <div class="progress-header">
-                    <button id="onboarding-back-btn" class="back-chevron" onclick="goBack()" title="Back">‹</button>
+                    <button id="onboarding-back-btn" class="back-chevron hidden" onclick="goBack()" title="Back">‹</button>
                     <div class="progress-bar">
                         <div class="progress-step active" data-step="1">1</div>
                         <div class="progress-line"></div>
                         <div class="progress-step" data-step="2">2</div>
-                        <div class="progress-line"></div>
-                        <div class="progress-step" data-step="3">3</div>
-                        <div class="progress-line"></div>
-                        <div class="progress-step" data-step="4">4</div>
-                        <div class="progress-line"></div>
-                        <div class="progress-step" data-step="5">5</div>
                     </div>
+                    <span class="progress-label" id="progress-label" style="margin-left: 1rem; font-size: 0.85rem; color: #999;">Step 1 of 2</span>
                 </div>
 
-                <!-- Step 1: Group Type -->
+                <!-- Step 1: Who + Where (combined) -->
                 <div id="step-1" class="onboarding-step active" style="display: block;">
-                    <h2>Who are you planning activities for?</h2>
-                    <p class="subtitle">This helps us personalize your recommendations</p>
+                    <h2>Who are you planning for?</h2>
+                    <p class="subtitle">Pick one, then set your location</p>
 
                     <div class="selection-grid">
                         <div class="selection-card" data-value="solo">
@@ -217,151 +217,30 @@
                             <div class="card-label">With Friends</div>
                         </div>
                     </div>
-                </div>
 
-                <!-- Step 2: Location -->
-                <div id="step-2" class="onboarding-step">
-                    <div id="step-2a" class="substep active" style="display: block;">
-                        <h2>Where are you based?</h2>
-                        <p class="subtitle">We'll use this to calculate travel times</p>
+                    <!-- Location section (inline, below group cards) -->
+                    <div id="step1-location" class="step1-location-section" style="margin-top: 1.5rem; display: none;">
+                        <h3 style="text-align: center; margin-bottom: 1rem;">📍 Where are you?</h3>
 
-                        <button id="use-location-btn" class="btn btn-location">
+                        <button id="use-location-btn" class="btn btn-location" style="margin-bottom: 0.75rem;">
                             <span class="btn-icon">📍</span>
-                            <span class="btn-text">Use My Current Location</span>
-                            <span class="btn-subtext">For accurate travel times</span>
+                            <span class="btn-text">Use My Location</span>
                         </button>
 
-                        <button id="manual-location-btn" class="btn-link">No thanks, I'll enter manually</button>
-                    </div>
+                        <div style="text-align: center; color: #999; font-size: 0.9rem; margin-bottom: 0.75rem;">or enter ZIP code</div>
 
-                    <div id="step-2b" class="substep">
-                        <h2>How would you like to enter your location?</h2>
-
-                        <div class="selection-grid two-col">
-                            <div class="selection-card" data-value="zip" id="select-zip">
-                                <div class="card-emoji">🏠</div>
-                                <div class="card-label">ZIP Code</div>
-                                <div class="card-sublabel">(faster entry)</div>
-                            </div>
-                            <div class="selection-card" data-value="address" id="select-address">
-                                <div class="card-emoji">📍</div>
-                                <div class="card-label">Full Address</div>
-                                <div class="card-sublabel">(exact times)</div>
-                            </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="text" id="zip-input" placeholder="94102" maxlength="10" style="flex: 1; padding: 0.875rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem;">
+                            <button class="btn btn-primary" onclick="submitZipAndAdvance()" style="width: auto; margin-top: 0; padding: 0.875rem 1.25rem;">Go →</button>
                         </div>
-
-                        <div id="zip-input-group" class="input-group hidden">
-                            <label>Enter your ZIP code:</label>
-                            <input type="text" id="zip-input" placeholder="94102" maxlength="10">
-                            <p class="privacy-note">🔒 We only use this for travel times</p>
-                            <button class="btn btn-primary" onclick="submitLocation('zip')">Continue →</button>
-                        </div>
-
-                        <div id="address-input-group" class="input-group hidden">
-                            <label>Enter your address:</label>
-                            <input type="text" id="address-input" placeholder="123 Main St, San Francisco, CA">
-                            <p class="privacy-note">🔒 We only use this for travel times</p>
-                            <button class="btn btn-primary" onclick="submitLocation('address')">Continue →</button>
-                        </div>
-                    </div>
-
-                    <div id="step-2c" class="substep">
-                        <h2>✓ Location set!</h2>
-                        <p class="location-display" id="location-display">📍 San Francisco, CA 94102</p>
-
-                        <label class="save-location-option">
-                            <input type="checkbox" id="save-location-checkbox" onchange="handleSaveLocationCheckbox(this)">
-                            <span>Save as my home location</span>
-                        </label>
-
-                        <button class="btn btn-primary" onclick="completeLocationStep()">Continue →</button>
-                    </div>
-
-                    <div id="step-2d" class="substep">
-                        <h2>Travel Preferences</h2>
-
-                        <div class="form-section">
-                            <label>How do you get around? (select all)</label>
-                            <div class="selection-grid three-col">
-                                <div class="selection-card small selectable" data-value="walking">
-                                    <div class="card-emoji">🚶</div>
-                                    <div class="card-label">Walking/Biking</div>
-                                </div>
-                                <div class="selection-card small selectable selected" data-value="transit">
-                                    <div class="card-emoji">🚇</div>
-                                    <div class="card-label">Transit</div>
-                                </div>
-                                <div class="selection-card small selectable selected" data-value="car">
-                                    <div class="card-emoji">🚗</div>
-                                    <div class="card-label">Car</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-section">
-                            <label>Typical departure times (select all)</label>
-                            <p class="section-sublabel">Saturday:</p>
-                            <div class="selection-grid three-col">
-                                <div class="selection-card small selectable selected" data-day="saturday" data-value="morning">
-                                    <div class="card-label">Morning</div>
-                                    <div class="card-sublabel">8-10 AM</div>
-                                </div>
-                                <div class="selection-card small selectable" data-day="saturday" data-value="midday">
-                                    <div class="card-label">Midday</div>
-                                    <div class="card-sublabel">11-1 PM</div>
-                                </div>
-                                <div class="selection-card small selectable" data-day="saturday" data-value="afternoon">
-                                    <div class="card-label">Afternoon</div>
-                                    <div class="card-sublabel">2-5 PM</div>
-                                </div>
-                            </div>
-                            <p class="section-sublabel">Sunday:</p>
-                            <div class="selection-grid three-col">
-                                <div class="selection-card small selectable selected" data-day="sunday" data-value="morning">
-                                    <div class="card-label">Morning</div>
-                                    <div class="card-sublabel">8-10 AM</div>
-                                </div>
-                                <div class="selection-card small selectable" data-day="sunday" data-value="midday">
-                                    <div class="card-label">Midday</div>
-                                    <div class="card-sublabel">11-1 PM</div>
-                                </div>
-                                <div class="selection-card small selectable" data-day="sunday" data-value="afternoon">
-                                    <div class="card-label">Afternoon</div>
-                                    <div class="card-sublabel">2-5 PM</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="form-section">
-                            <label>Max travel time (select all that apply)</label>
-                            <div class="selection-grid four-col">
-                                <div class="selection-card small selectable selected" data-value="0-15">
-                                    <div class="card-label">&lt; 15 min</div>
-                                    <div class="card-sublabel">nearby</div>
-                                </div>
-                                <div class="selection-card small selectable selected" data-value="15-30">
-                                    <div class="card-label">15-30 min</div>
-                                    <div class="card-sublabel">moderate</div>
-                                </div>
-                                <div class="selection-card small selectable" data-value="30-60">
-                                    <div class="card-label">30-60 min</div>
-                                    <div class="card-sublabel">worth it</div>
-                                </div>
-                                <div class="selection-card small selectable" data-value="60+">
-                                    <div class="card-label">60+ min</div>
-                                    <div class="card-sublabel">day trip</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <button class="btn btn-primary" onclick="goToStep(3)">Continue →</button>
+                        <p class="privacy-note" style="margin-top: 0.5rem;">🔒 Only used for finding nearby activities</p>
                     </div>
                 </div>
 
-                <!-- Step 3: Interests -->
-                <div id="step-3" class="onboarding-step">
+                <!-- Step 2: Interests -->
+                <div id="step-2" class="onboarding-step">
                     <h2>What do you enjoy?</h2>
-                    <p class="subtitle">Pick at least 3</p>
+                    <p class="subtitle">Pick at least 1</p>
 
                     <div class="selection-grid three-col" id="interests-grid">
                         <div class="selection-card selectable" data-value="nature">
@@ -402,104 +281,10 @@
                         </div>
                     </div>
 
-                    <p class="selection-count" id="interests-count">0 selected (minimum 3)</p>
+                    <p class="selection-count" id="interests-count">0 selected (minimum 1)</p>
 
-                    <button class="btn btn-primary" id="step3-continue" disabled onclick="goToStep(4)">Continue →</button>
-                </div>
-
-                <!-- Step 4: Activity Style -->
-                <div id="step-4" class="onboarding-step">
-                    <h2>What's your ideal activity vibe?</h2>
-
-                    <div class="form-section">
-                        <label>Energy Level:</label>
-                        <div class="selection-grid three-col">
-                            <div class="selection-card selectable" data-group="energy" data-value="relaxing">
-                                <div class="card-emoji">🧘</div>
-                                <div class="card-label">Relaxing</div>
-                                <div class="card-sublabel">sit, view, chill</div>
-                            </div>
-                            <div class="selection-card selectable selected" data-group="energy" data-value="moderate">
-                                <div class="card-emoji">🚶</div>
-                                <div class="card-label">Moderate</div>
-                                <div class="card-sublabel">walking, exploring</div>
-                            </div>
-                            <div class="selection-card selectable" data-group="energy" data-value="active">
-                                <div class="card-emoji">🏃</div>
-                                <div class="card-label">Active</div>
-                                <div class="card-sublabel">adventure, sports</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-section">
-                        <label>How much time per activity?</label>
-                        <div class="selection-grid three-col">
-                            <div class="selection-card selectable" data-group="time" data-value="quick">
-                                <div class="card-label">1-2 hours</div>
-                                <div class="card-sublabel">Quick trip</div>
-                            </div>
-                            <div class="selection-card selectable selected" data-group="time" data-value="half_day">
-                                <div class="card-label">3-4 hours</div>
-                                <div class="card-sublabel">Half-day</div>
-                            </div>
-                            <div class="selection-card selectable" data-group="time" data-value="full_day">
-                                <div class="card-label">5+ hours</div>
-                                <div class="card-sublabel">Full day</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <button class="btn btn-primary" onclick="goToStep(5)">Continue →</button>
-                </div>
-
-                <!-- Step 5: Constraints (Optional) -->
-                <div id="step-5" class="onboarding-step">
-                    <h2>A few more details</h2>
-                    <p class="subtitle">Optional - you can skip this</p>
-
-                    <div class="form-section">
-                        <label>Budget per outing:</label>
-                        <div class="selection-grid four-col">
-                            <div class="selection-card small selectable" data-group="budget" data-value="free">
-                                <div class="card-label">Free</div>
-                                <div class="card-sublabel">only</div>
-                            </div>
-                            <div class="selection-card small selectable" data-group="budget" data-value="low">
-                                <div class="card-label">&lt; $25</div>
-                                <div class="card-sublabel">per person</div>
-                            </div>
-                            <div class="selection-card small selectable selected" data-group="budget" data-value="moderate">
-                                <div class="card-label">&lt; $50</div>
-                                <div class="card-sublabel">per person</div>
-                            </div>
-                            <div class="selection-card small selectable" data-group="budget" data-value="any">
-                                <div class="card-label">No limit</div>
-                                <div class="card-sublabel"></div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="form-section">
-                        <label>Accessibility needs:</label>
-                        <div class="checkbox-group">
-                            <label><input type="checkbox" name="accessibility" value="wheelchair"> Wheelchair accessible</label>
-                            <label><input type="checkbox" name="accessibility" value="stroller"> Stroller friendly</label>
-                            <label><input type="checkbox" name="accessibility" value="limited_walking"> Limited walking</label>
-                        </div>
-                    </div>
-
-                    <div class="form-section">
-                        <label>Prefer to avoid:</label>
-                        <div class="checkbox-group">
-                            <label><input type="checkbox" name="avoid" value="crowds"> Crowded places</label>
-                            <label><input type="checkbox" name="avoid" value="tourist"> Tourist spots</label>
-                            <label><input type="checkbox" name="avoid" value="reservations"> Requires reservations</label>
-                            <label><input type="checkbox" name="avoid" value="waits"> Long wait times</label>
-                        </div>
-                    </div>
-
-                    <button class="btn btn-primary" onclick="completeOnboarding()">🎉 Show My Recommendations</button>
+                    <button class="btn btn-primary" onclick="showMeEverything()" style="background: #10b981; margin-bottom: 0.5rem;">🌟 Show Me Everything</button>
+                    <button class="btn btn-primary" id="step2-continue" disabled onclick="completeOnboarding()">Continue →</button>
                 </div>
 
                 <!-- Sign in / Sign up link for existing users -->
