@@ -936,6 +936,7 @@ def _is_low_quality_item(item):
         return True
     
     # Test/draft items
+    title_lower = title.lower()
     if re.match(r'^test\s*[-–—:]', title_lower):
         return True
 
@@ -1735,35 +1736,86 @@ out center {limit * 3};
         return []
 
 
+def _reverse_geocode_city_state(lat, lng):
+    """Reverse geocode lat/lng to (city, state_abbr) using OSM Nominatim."""
+    try:
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat, "lon": lng, "format": "json", "zoom": 10},
+            headers={"User-Agent": "ActivityPlanner/1.0"},
+            timeout=3,
+        )
+        if r.status_code == 200:
+            addr = r.json().get("address", {})
+            city = addr.get("city") or addr.get("town") or addr.get("village") or ""
+            state = addr.get("state", "")
+            # Convert state to 2-letter abbreviation
+            _state_abbr = {
+                "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+                "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+                "Florida": "FL", "Georgia": "GA", "Hawaii": "HI", "Idaho": "ID",
+                "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+                "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+                "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+                "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+                "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+                "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+                "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC",
+                "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX", "Utah": "UT",
+                "Vermont": "VT", "Virginia": "VA", "Washington": "WA", "West Virginia": "WV",
+                "Wisconsin": "WI", "Wyoming": "WY",
+            }
+            abbr = _state_abbr.get(state, state[:2].lower() if state else "")
+            return city, abbr
+    except Exception:
+        pass
+    return None, None
+
+
 def fetch_eventbrite_public(user_lat, user_lng, radius_miles=25, limit=10):
     """
     Scrape Eventbrite public event search page for local events.
-    No API key needed — parses JSON-LD structured data from the page.
-    Complement to fetch_eventbrite_events (which needs a token).
+    No API key needed — parses embedded __SERVER_DATA__ JSON-LD from the page.
+    Uses city-slug URLs (e.g. /d/ca--fremont/events/) for location targeting.
     """
     if not requests:
         return []
     try:
         import json as _json
-        # Derive a location slug from coordinates via reverse geocode approximation
-        # Use a simple city name approach
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml",
         }
-        # Try a generic location-based search
-        url = f"https://www.eventbrite.com/d/united-states/events/?lat={user_lat}&lng={user_lng}&radius={int(radius_miles)}mi"
-        r = requests.get(url, headers=headers, timeout=4, allow_redirects=True)
+
+        # Reverse geocode to get city slug
+        city, state_abbr = _reverse_geocode_city_state(user_lat, user_lng)
+        if city and state_abbr:
+            city_slug = city.lower().replace(" ", "-")
+            state_slug = state_abbr.lower()
+            url = f"https://www.eventbrite.com/d/{state_slug}--{city_slug}/events/"
+        else:
+            # Fallback to lat/lng (less reliable but better than nothing)
+            url = f"https://www.eventbrite.com/d/united-states/events/?lat={user_lat}&lng={user_lng}"
+
+        print(f"[LOCAL_FEEDS] Eventbrite public: fetching {url}")
+        r = requests.get(url, headers=headers, timeout=6, allow_redirects=True)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Eventbrite public: {r.status_code}")
             return []
+
         items = []
-        # Parse JSON-LD structured data
-        for match in re.finditer(r'<script type="application/ld\+json">\s*(\{[^<]+\})\s*</script>', r.text):
-            try:
-                data = _json.loads(match.group(1))
-                if data.get("@type") == "Event" or data.get("@type") == "SocialEvent":
-                    loc = data.get("location", {})
+
+        # Parse __SERVER_DATA__ which contains JSON-LD with ItemList
+        sd_match = re.search(r'window\.__SERVER_DATA__\s*=\s*(\{.+?\});', r.text)
+        if sd_match:
+            sd = _json.loads(sd_match.group(1))
+            jsonld = sd.get("jsonld", [])
+            if isinstance(jsonld, list) and jsonld:
+                jsonld = jsonld[0]
+            if isinstance(jsonld, dict):
+                for entry in jsonld.get("itemListElement", []):
+                    ev = entry.get("item", entry)
+                    loc = ev.get("location", {})
                     loc_str = ""
                     if isinstance(loc, dict):
                         loc_name = loc.get("name", "")
@@ -1777,40 +1829,50 @@ def fetch_eventbrite_public(user_lat, user_lng, radius_miles=25, limit=10):
                             ]))
                         elif isinstance(addr, str):
                             loc_str = f"{loc_name}, {addr}" if loc_name else addr
+                    img = ev.get("image", "")
+                    if isinstance(img, dict):
+                        img = img.get("url", "")
                     items.append({
-                        "title": data.get("name", "Event"),
-                        "link": data.get("url", ""),
-                        "description": (data.get("description", "") or "")[:500],
+                        "title": ev.get("name", "Event"),
+                        "link": ev.get("url", ""),
+                        "description": (ev.get("description", "") or "")[:500],
+                        "pub_date": ev.get("startDate", ""),
                         "location_str": loc_str,
+                        "image_url": img,
                         "source": "Eventbrite",
-                        "source_url": data.get("url", "https://www.eventbrite.com"),
+                        "source_url": ev.get("url", "https://www.eventbrite.com"),
+                        "place_id": f"eventbrite_{ev.get('url', '').split('/e/')[-1].split('?')[0]}" if "/e/" in ev.get("url", "") else "",
                         "category": "events",
-                        "event_date": data.get("startDate", ""),
-                        "price_flag": "$",
-                        "kid_friendly": False,
                     })
-            except (_json.JSONDecodeError, TypeError):
-                continue
-        # Also try parsing event cards from HTML as fallback
+
+        # Fallback: parse individual JSON-LD Event blocks
         if not items:
-            for match in re.finditer(
-                r'data-event-id="(\d+)"[^>]*>.*?<h2[^>]*>(.*?)</h2>',
-                r.text, re.DOTALL
-            ):
-                eid = match.group(1)
-                title = re.sub(r'<[^>]+>', '', match.group(2)).strip()
-                if title:
-                    items.append({
-                        "title": title,
-                        "link": f"https://www.eventbrite.com/e/{eid}",
-                        "description": "",
-                        "location_str": "",
-                        "source": "Eventbrite",
-                        "source_url": f"https://www.eventbrite.com/e/{eid}",
-                        "category": "events",
-                        "price_flag": "$",
-                        "kid_friendly": False,
-                    })
+            for match in re.finditer(r'<script type="application/ld\+json">\s*(\{[^<]+\})\s*</script>', r.text):
+                try:
+                    data = _json.loads(match.group(1))
+                    if data.get("@type") in ("Event", "SocialEvent"):
+                        loc = data.get("location", {})
+                        loc_str = ""
+                        if isinstance(loc, dict):
+                            loc_name = loc.get("name", "")
+                            addr = loc.get("address", {})
+                            if isinstance(addr, dict):
+                                loc_str = ", ".join(filter(None, [
+                                    loc_name, addr.get("addressLocality", ""), addr.get("addressRegion", ""),
+                                ]))
+                        items.append({
+                            "title": data.get("name", "Event"),
+                            "link": data.get("url", ""),
+                            "description": (data.get("description", "") or "")[:500],
+                            "pub_date": data.get("startDate", ""),
+                            "location_str": loc_str,
+                            "source": "Eventbrite",
+                            "source_url": data.get("url", "https://www.eventbrite.com"),
+                            "category": "events",
+                        })
+                except (_json.JSONDecodeError, TypeError):
+                    continue
+
         print(f"[LOCAL_FEEDS] Eventbrite public: fetched {len(items[:limit])} events")
         return items[:limit]
     except Exception as e:
@@ -2280,12 +2342,11 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
 
     # Fetch all sources in parallel (max wait = slowest source, not sum of all)
     # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
-    # _fetch_parks_rec (dead RSS feeds),
-    # _fetch_eventbrite_pub (JS-rendered, returns page headers not events)
+    # _fetch_parks_rec (dead RSS feeds)
     tasks = [
         _fetch_luma, _fetch_meetup, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
         _fetch_yelp, _fetch_ticketmaster, _fetch_osm,
-        _fetch_tripadvisor,
+        _fetch_tripadvisor, _fetch_eventbrite_pub,
     ]
     # Early return: stop waiting after 5s so we return fast with available results.
     FETCH_TIMEOUT = 4
