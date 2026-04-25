@@ -612,60 +612,20 @@ def fetch_luma_events(lat, lng, radius_miles=25, limit=10):
 
 def fetch_meetup_events(lat, lng, radius_miles=25, categories=None, limit=10):
     """
-    Fetch events from Meetup API (GraphQL) by location.
-    Uses Meetup's public GraphQL endpoint for event discovery.
+    Fetch events from Meetup's public GraphQL endpoint (gql2) by location.
+    Uses recommendedEvents as primary, eventSearch as fallback.
     """
     if not requests:
         return []
-    try:
-        # Meetup GraphQL endpoint
-        url = "https://www.meetup.com/gql"
-        
-        # GraphQL query for nearby events
-        query = """
-        query($lat: Float!, $lon: Float!, $radius: Int!, $first: Int!) {
-            rankedEvents(filter: {lat: $lat, lon: $lon, radius: $radius}, first: $first) {
-                edges {
-                    node {
-                        id
-                        title
-                        description
-                        dateTime
-                        eventUrl
-                        venue {
-                            name
-                            address
-                            city
-                            state
-                        }
-                        group {
-                            name
-                        }
-                    }
-                }
-            }
-        }
-        """
-        
-        variables = {
-            "lat": lat,
-            "lon": lng,
-            "radius": int(radius_miles * 1.6),  # Convert to km
-            "first": limit,
-        }
-        
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-        }
-        
-        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=4)
-        if r.status_code != 200:
-            print(f"[LOCAL_FEEDS] Meetup GraphQL error: {r.status_code}")
-            return _scrape_meetup_events(lat, lng, limit)
-        
-        data = r.json()
-        edges = data.get("data", {}).get("rankedEvents", {}).get("edges", [])
+
+    url = "https://www.meetup.com/gql2"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    radius_km = int(radius_miles * 1.6)
+
+    def _parse_edges(edges):
         items = []
         for edge in edges[:limit]:
             ev = edge.get("node", {})
@@ -686,11 +646,81 @@ def fetch_meetup_events(lat, lng, radius_miles=25, categories=None, limit=10):
                 "source_url": ev.get("eventUrl", "https://www.meetup.com"),
                 "place_id": f"meetup_{ev.get('id', '')}",
             })
-        print(f"[LOCAL_FEEDS] Meetup: fetched {len(items)} events")
         return items
+
+    # Primary: recommendedEvents (no query string needed, better relevance)
+    try:
+        query = """
+        query($filter: RecommendedEventsFilter!, $first: Int) {
+            recommendedEvents(filter: $filter, first: $first) {
+                edges {
+                    node {
+                        id
+                        title
+                        description
+                        dateTime
+                        endTime
+                        eventUrl
+                        venue { name address city state }
+                        group { name }
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "filter": {"lat": lat, "lon": lng, "radius": radius_km, "eventType": "PHYSICAL"},
+            "first": limit,
+        }
+        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if "errors" not in data:
+                edges = data.get("data", {}).get("recommendedEvents", {}).get("edges", [])
+                if edges:
+                    items = _parse_edges(edges)
+                    print(f"[LOCAL_FEEDS] Meetup (recommendedEvents): fetched {len(items)} events")
+                    return items
     except Exception as e:
-        print(f"[LOCAL_FEEDS] Meetup error: {e}")
-        return _scrape_meetup_events(lat, lng, limit)
+        print(f"[LOCAL_FEEDS] Meetup recommendedEvents error: {e}")
+
+    # Fallback: eventSearch (requires query string)
+    try:
+        query = """
+        query($filter: EventSearchFilter!, $first: Int) {
+            eventSearch(filter: $filter, first: $first) {
+                edges {
+                    node {
+                        id
+                        title
+                        description
+                        dateTime
+                        endTime
+                        eventUrl
+                        venue { name address city state }
+                        group { name }
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "filter": {"lat": lat, "lon": lng, "radius": radius_km, "eventType": "PHYSICAL", "query": "events"},
+            "first": limit,
+        }
+        r = requests.post(url, json={"query": query, "variables": variables}, headers=headers, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            if "errors" not in data:
+                edges = data.get("data", {}).get("eventSearch", {}).get("edges", [])
+                items = _parse_edges(edges)
+                print(f"[LOCAL_FEEDS] Meetup (eventSearch): fetched {len(items)} events")
+                return items
+    except Exception as e:
+        print(f"[LOCAL_FEEDS] Meetup eventSearch error: {e}")
+
+    print("[LOCAL_FEEDS] Meetup: all methods failed")
+    return []
 
 
 def _scrape_meetup_events(lat, lng, limit=10):
@@ -2250,10 +2280,10 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
 
     # Fetch all sources in parallel (max wait = slowest source, not sum of all)
     # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
-    # _fetch_parks_rec (dead RSS feeds), _fetch_meetup (404 API change),
+    # _fetch_parks_rec (dead RSS feeds),
     # _fetch_eventbrite_pub (JS-rendered, returns page headers not events)
     tasks = [
-        _fetch_luma, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
+        _fetch_luma, _fetch_meetup, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
         _fetch_yelp, _fetch_ticketmaster, _fetch_osm,
         _fetch_tripadvisor,
     ]
