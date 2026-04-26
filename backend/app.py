@@ -1123,20 +1123,23 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
     print("[RECOMMENDATIONS] Fetching Google Places + local feeds in parallel...")
     with _cf.ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(_fetch_google_places), executor.submit(_fetch_local)]
-        for future in _cf.as_completed(futures, timeout=3):
-            try:
-                source_name, items, had_error = future.result()
-                sources_tried.append(source_name)
-                if items:
-                    all_items.extend(items)
-                    sources_succeeded.append(source_name)
-                    record_success(source_name)
-                    print(f"[RECOMMENDATIONS] {source_name}: {len(items)} items")
-                elif had_error:
-                    record_failure(source_name)
-                    sources_failed.append(source_name)
-            except Exception as e:
-                print(f"[RECOMMENDATIONS] Parallel fetch error: {e}")
+        try:
+            for future in _cf.as_completed(futures, timeout=10):
+                try:
+                    source_name, items, had_error = future.result()
+                    sources_tried.append(source_name)
+                    if items:
+                        all_items.extend(items)
+                        sources_succeeded.append(source_name)
+                        record_success(source_name)
+                        print(f"[RECOMMENDATIONS] {source_name}: {len(items)} items")
+                    elif had_error:
+                        record_failure(source_name)
+                        sources_failed.append(source_name)
+                except Exception as e:
+                    print(f"[RECOMMENDATIONS] Parallel fetch error: {e}")
+        except Exception as e:
+            print(f"[RECOMMENDATIONS] Parallel timeout - continuing with {len(all_items)} items: {e}")
     
     # Step 4: Merge, deduplicate and rank results
     if all_items:
