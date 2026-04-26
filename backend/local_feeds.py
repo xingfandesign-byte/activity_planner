@@ -1050,18 +1050,35 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
     
     user_interests = user_interests or []
     interest_categories = {
-        "arts_culture": ["arts", "culture", "art", "museum", "gallery", "theater", "music"],
-        "nature": ["nature", "park", "outdoor", "hiking", "garden", "trail"],
-        "food_drink": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine"],
-        "food_drinks": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine"],
-        "fitness": ["fitness", "sports", "yoga", "gym", "run", "bike"],
-        "adventure": ["adventure", "sports", "active", "climb", "kayak", "hike"],
-        "learning": ["learning", "workshop", "class", "lecture", "education", "science", "library"],
-        "shopping": ["shopping", "market", "boutique", "store", "flea"],
-        "nightlife": ["nightlife", "club", "bar", "concert", "live music"],
-        "family": ["family", "kids", "children", "family-friendly", "playground"],
+        "arts_culture": ["arts", "culture", "art", "museum", "gallery", "theater", "theatre",
+                         "exhibit", "sculpture", "painting", "ballet", "opera", "dance", "craft"],
+        "nature": ["nature", "park", "outdoor", "hiking", "garden", "trail", "lake", "creek",
+                    "wildlife", "bird", "botanical", "forest", "beach", "mountain", "sunset",
+                    "camping", "kayak", "canoe"],
+        "food_drink": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine",
+                       "brunch", "dinner", "lunch", "tasting", "culinary", "chef", "cooking",
+                       "bakery", "coffee", "cocktail", "bbq", "farmer market"],
+        "food_drinks": ["food", "restaurant", "dining", "cafe", "bar", "brewery", "wine",
+                        "brunch", "dinner", "lunch", "tasting", "culinary", "chef", "cooking"],
+        "music": ["music", "concert", "jazz", "live band", "orchestra", "symphony", "blues",
+                  "rock", "hip hop", "dj", "open mic", "karaoke", "choir", "sing",
+                  "acoustic", "folk", "classical", "band", "performer", "musician"],
+        "fitness": ["fitness", "sports", "yoga", "gym", "run", "bike", "swim", "marathon",
+                    "5k", "10k", "pilates", "crossfit", "workout", "cycling"],
+        "adventure": ["adventure", "sports", "active", "climb", "kayak", "hike", "zipline",
+                      "rafting", "skydive"],
+        "learning": ["learning", "workshop", "class", "lecture", "education", "science",
+                     "library", "book club", "stem", "tech talk", "seminar", "tutorial"],
+        "shopping": ["shopping", "market", "boutique", "store", "flea", "antique", "vintage"],
+        "nightlife": ["nightlife", "club", "bar", "concert", "live music", "lounge", "dj"],
+        "family": ["family", "kids", "children", "family-friendly", "playground", "toddler",
+                   "storytime", "puppet", "zoo", "aquarium", "all ages", "parent"],
+        "outdoor": ["outdoor", "park", "hike", "hiking", "trail", "nature", "garden", "lake",
+                    "picnic", "bike", "beach", "camping", "fishing"],
         "events": ["event", "festival", "fair", "celebration", "community"],
-        "entertainment": ["entertainment", "show", "theater", "music", "concert", "comedy"],
+        "entertainment": ["entertainment", "show", "theater", "music", "concert", "comedy",
+                          "movie", "film", "magic", "circus", "carnival", "trivia",
+                          "game night", "arcade"],
         "relaxation": ["relaxation", "spa", "meditation", "yoga", "wellness", "garden"],
     }
     
@@ -1145,8 +1162,44 @@ def rank_and_dedupe_recommendations(items, user_interests=None, max_items=5, gro
             score += 5
         
         # Bonus for items with event dates (timely content is more actionable)
+        # Also boost events happening soon (today/tomorrow/this weekend)
         if item.get("event_date"):
             score += 5
+            try:
+                event_date_str = item["event_date"]
+                # Try parsing common date formats
+                event_dt = None
+                for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                            "%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S"):
+                    try:
+                        event_dt = datetime.strptime(event_date_str[:19], fmt[:min(len(fmt), 19)])
+                        break
+                    except (ValueError, IndexError):
+                        continue
+                if event_dt:
+                    days_until = (event_dt.date() - now.date()).days
+                    if days_until == 0:
+                        score += 20  # Today
+                    elif days_until == 1:
+                        score += 15  # Tomorrow
+                    elif 0 < days_until <= 3:
+                        score += 10  # This weekend / next few days
+                    elif 3 < days_until <= 7:
+                        score += 5   # This week
+                    elif days_until > 30:
+                        score -= 5   # Far future, less relevant
+                    elif days_until < 0:
+                        score -= 30  # Past event
+            except Exception:
+                pass
+
+        # Penalize singles/dating events for family groups
+        if group_type == "family" or "family" in user_interests:
+            singles_keywords = ["singles", "dating", "speed date", "mixer", "matchmak",
+                                "singles night", "date night", "21+", "18+", "adults only",
+                                "single", "mingle"]
+            if any(kw in title_lower or kw in description for kw in singles_keywords):
+                score -= 50
         
         # Time-aware scoring
         indoor_outdoor = (item.get("indoor_outdoor", "") or "").lower()
@@ -1252,6 +1305,40 @@ def _detect_location_type(location_str):
     
     # Default to venue_name for anything with a proper noun feel
     return "venue_name"
+
+
+def _infer_category(title, description="", existing_category=""):
+    """Infer a more specific category from title/description keywords."""
+    text = f"{title} {description} {existing_category}".lower()
+    # Order matters: more specific categories checked first
+    # Use ordered list of tuples to ensure consistent priority
+    category_rules = [
+        ("family", ["family", "kid", "kids", "children", "child", "toddler", "baby", "parent",
+                     "playground", "storytime", "story time", "puppet", "zoo", "aquarium",
+                     "family-friendly", "all ages"]),
+        ("fitness", ["yoga", "run", "running", "marathon", "gym", "workout", "fitness", "cycling",
+                      "swim", "pilates", "crossfit", "bootcamp", "5k", "10k"]),
+        ("entertainment", ["concert", "jazz", "music", "live band", "comedy", "show", "movie",
+                           "film", "karaoke", "trivia", "game night", "arcade", "carnival",
+                           "circus", "magic", "dj", "hip hop", "rock", "blues", "orchestra",
+                           "symphony", "open mic"]),
+        ("food_drink", ["food", "dinner", "lunch", "brunch", "restaurant", "cafe", "coffee",
+                        "brewery", "wine", "tasting", "cooking", "chef", "culinary", "bbq",
+                        "farmer market", "farmers market", "bake", "bakery", "cocktail"]),
+        ("nature", ["hike", "hiking", "trail", "nature", "outdoor", "lake", "creek", "garden",
+                     "wildlife", "bird", "sunset", "sunrise", "mountain", "beach", "forest",
+                     "camping", "kayak", "canoe", "botanical"]),
+        ("arts_culture", ["art", "museum", "gallery", "exhibit", "theater", "theatre", "ballet",
+                          "opera", "dance", "craft", "painting", "sculpture", "pottery", "cultural",
+                          "history", "heritage", "literary"]),
+        ("learning", ["workshop", "class", "lecture", "seminar", "education", "learn", "stem",
+                      "science", "book club", "library", "tech talk", "coding", "tutorial",
+                      "training", "certification"]),
+    ]
+    for cat, keywords in category_rules:
+        if any(kw in text for kw in keywords):
+            return cat
+    return existing_category or "events"
 
 
 def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_str, geocode_fn=None, user_state=None):
@@ -1427,7 +1514,7 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         "type": "event",
         "place_id": place_id,
         "title": title,
-        "category": item.get("category") or "events",
+        "category": _infer_category(title, description, item.get("category", "")),
         "distance_miles": distance_value,
         "travel_time_min": travel_time_value,
         "distance_display": distance_display,
@@ -1447,6 +1534,7 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         "rating": 0,
         "total_ratings": 0,
         "photo_url": item.get("image_url") or item.get("photo_url"),
+        "source": source,
         "feed_source": source,
         "feed_item": True,
     }
@@ -2219,11 +2307,97 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
     - RSS/Atom feeds (if configured)
     """
     from datetime import datetime
+    from math import radians, sin, cos, sqrt, atan2
+    import time as _time
     week_str = week_str or f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
     config = get_local_feed_config()
     raw_items = []
     radius_miles = max_radius_miles or 25
     user_interests = (profile or {}).get("interests", [])
+
+    # Build a default geocode function if none provided
+    if geocode_fn is None:
+        # Bay Area city lookup table to avoid Nominatim calls for common locations
+        _BAY_AREA_CITIES = {
+            "san francisco": (37.7749, -122.4194), "sf": (37.7749, -122.4194),
+            "oakland": (37.8044, -122.2712), "berkeley": (37.8716, -122.2727),
+            "san jose": (37.3382, -121.8863), "fremont": (37.5485, -121.9886),
+            "newark": (37.5316, -122.0392), "hayward": (37.6688, -122.0808),
+            "union city": (37.5934, -122.0438), "milpitas": (37.4323, -121.8996),
+            "sunnyvale": (37.3688, -122.0363), "santa clara": (37.3541, -121.9552),
+            "mountain view": (37.3861, -122.0839), "palo alto": (37.4419, -122.1430),
+            "redwood city": (37.4852, -122.2364), "san mateo": (37.5630, -122.3255),
+            "daly city": (37.6879, -122.4702), "concord": (37.9780, -122.0311),
+            "walnut creek": (37.9101, -122.0652), "pleasanton": (37.6624, -121.8747),
+            "livermore": (37.6819, -121.7680), "dublin": (37.7022, -121.9358),
+            "alameda": (37.7652, -122.2416), "richmond": (37.9358, -122.3477),
+            "san leandro": (37.7249, -122.1561), "castro valley": (37.6941, -122.0864),
+            "emeryville": (37.8313, -122.2852), "albany": (37.8869, -122.2978),
+            "el cerrito": (37.9161, -122.3122), "kensington": (37.9105, -122.2802),
+            "piedmont": (37.8243, -122.2318), "sausalito": (37.8591, -122.4853),
+            "tiburon": (37.8735, -122.4567), "mill valley": (37.9060, -122.5450),
+            "san rafael": (37.9735, -122.5311), "napa": (38.2975, -122.2869),
+            "sonoma": (38.2919, -122.4580), "santa cruz": (36.9741, -122.0308),
+            "half moon bay": (37.4636, -122.4286), "pacifica": (37.6138, -122.4869),
+        }
+        _geocode_cache = {}  # location_str -> (lat, lng, timestamp)
+        _GEOCODE_CACHE_TTL = 3600  # 1 hour
+        _last_nominatim_call = [0.0]  # mutable for closure
+
+        def _default_geocode_fn(location_str):
+            if not location_str:
+                return None
+            # Check cache
+            cached = _geocode_cache.get(location_str)
+            if cached:
+                lat, lng, ts = cached
+                if _time.time() - ts < _GEOCODE_CACHE_TTL:
+                    return (lat, lng)
+
+            # Try Bay Area lookup table first
+            loc_lower = location_str.lower().strip()
+            # Extract city name: try "City, ST" pattern or just the string
+            import re as _re
+            city_match = _re.match(r'^([^,]+)', loc_lower)
+            city_name = city_match.group(1).strip() if city_match else loc_lower
+            # Also try matching after last comma for "Venue, City, CA" patterns
+            parts = [p.strip() for p in loc_lower.split(',')]
+            for part in parts:
+                clean = _re.sub(r'\b(ca|california)\b', '', part).strip()
+                if clean in _BAY_AREA_CITIES:
+                    coords = _BAY_AREA_CITIES[clean]
+                    _geocode_cache[location_str] = (coords[0], coords[1], _time.time())
+                    return coords
+            if city_name in _BAY_AREA_CITIES:
+                coords = _BAY_AREA_CITIES[city_name]
+                _geocode_cache[location_str] = (coords[0], coords[1], _time.time())
+                return coords
+
+            # Fall back to Nominatim (rate limited: 1 req/sec)
+            if not requests:
+                return None
+            elapsed = _time.time() - _last_nominatim_call[0]
+            if elapsed < 1.0:
+                _time.sleep(1.0 - elapsed)
+            try:
+                resp = requests.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={"q": location_str, "format": "json", "limit": 1},
+                    headers={"User-Agent": "ActivityPlanner/1.0"},
+                    timeout=3,
+                )
+                _last_nominatim_call[0] = _time.time()
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data:
+                        lat, lng = float(data[0]["lat"]), float(data[0]["lon"])
+                        _geocode_cache[location_str] = (lat, lng, _time.time())
+                        return (lat, lng)
+            except Exception as e:
+                print(f"[GEOCODE] Nominatim error for '{location_str}': {e}")
+            return None
+
+        geocode_fn = _default_geocode_fn
 
     print(f"[LOCAL_FEEDS] Fetching from all sources for ({user_lat}, {user_lng}), radius={radius_miles}mi (parallel)")
 
