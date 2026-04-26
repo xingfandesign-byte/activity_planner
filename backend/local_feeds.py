@@ -1673,8 +1673,9 @@ def fetch_osm_places(user_lat, user_lng, radius_miles=10, limit=15):
 );
 out center {limit * 3};
 """
-        url = "https://overpass-api.de/api/interpreter"
-        r = requests.post(url, data={"data": query}, timeout=4)
+        import urllib.parse as _urlparse
+        url = "https://overpass-api.de/api/interpreter?data=" + _urlparse.quote(query)
+        r = requests.get(url, headers={"User-Agent": "ActivityPlanner/1.0"}, timeout=8)
         if r.status_code != 200:
             print(f"[LOCAL_FEEDS] Overpass error: {r.status_code}")
             return []
@@ -2341,15 +2342,14 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
             return []
 
     # Fetch all sources in parallel (max wait = slowest source, not sum of all)
-    # Removed known-broken sources: _fetch_patch (0 results), _fetch_alltrails (403),
-    # _fetch_parks_rec (dead RSS feeds)
+    # _fetch_patch disabled (Patch.com RSS feeds all return 404 as of 2026-04)
     tasks = [
         _fetch_luma, _fetch_meetup, _fetch_510families, _fetch_eventbrite, _fetch_facebook, _fetch_rss,
         _fetch_yelp, _fetch_ticketmaster, _fetch_osm,
-        _fetch_tripadvisor, _fetch_eventbrite_pub,
+        _fetch_tripadvisor, _fetch_eventbrite_pub, _fetch_alltrails, _fetch_parks_rec,
     ]
-    # Early return: stop waiting after 5s so we return fast with available results.
-    FETCH_TIMEOUT = 4
+    # Early return: stop waiting after timeout so we return fast with available results.
+    FETCH_TIMEOUT = 6
     with ThreadPoolExecutor(max_workers=min(4, len(tasks))) as executor:
         futures = {executor.submit(t): t.__name__ for t in tasks}
         try:
@@ -2362,8 +2362,11 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
                         print(f"[LOCAL_FEEDS] {name}: {len(items)} items")
                 except Exception as e:
                     print(f"[LOCAL_FEEDS] Parallel fetch error: {e}")
-        except TimeoutError:
-            print(f"[LOCAL_FEEDS] Fetch timeout ({FETCH_TIMEOUT}s) - returning {len(raw_items)} items from completed sources")
+        except (TimeoutError, Exception) as e:
+            if 'TimeoutError' in type(e).__name__ or 'unfinished' in str(e):
+                print(f"[LOCAL_FEEDS] Fetch timeout ({FETCH_TIMEOUT}s) - returning {len(raw_items)} items from completed sources")
+            else:
+                print(f"[LOCAL_FEEDS] Parallel fetch error: {e}")
 
     print(f"[LOCAL_FEEDS] Total raw items from all sources: {len(raw_items)}")
 
