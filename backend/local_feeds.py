@@ -2339,6 +2339,17 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
             "san rafael": (37.9735, -122.5311), "napa": (38.2975, -122.2869),
             "sonoma": (38.2919, -122.4580), "santa cruz": (36.9741, -122.0308),
             "half moon bay": (37.4636, -122.4286), "pacifica": (37.6138, -122.4869),
+            "danville": (37.8218, -121.9999), "san ramon": (37.7799, -121.9780),
+            "martinez": (38.0194, -122.1341), "antioch": (38.0049, -121.8058),
+            "pittsburg": (38.0280, -121.8847), "brentwood": (37.9317, -121.6961),
+            "tracy": (37.7397, -121.4252), "saratoga": (37.2638, -122.0230),
+            "los gatos": (37.2358, -121.9624), "campbell": (37.2872, -121.9500),
+            "los altos": (37.3852, -122.1141), "atherton": (37.4613, -122.1979),
+            "woodside": (37.4299, -122.2539), "portola valley": (37.3841, -122.2352),
+            "south san francisco": (37.6547, -122.4077), "san bruno": (37.6305, -122.4111),
+            "millbrae": (37.5985, -122.3872), "burlingame": (37.5841, -122.3660),
+            "san carlos": (37.5072, -122.2605), "belmont": (37.5202, -122.2758),
+            "foster city": (37.5585, -122.2711),
         }
         _geocode_cache = {}  # location_str -> (lat, lng, timestamp)
         _GEOCODE_CACHE_TTL = 3600  # 1 hour
@@ -2372,6 +2383,22 @@ def get_local_feed_recommendations(profile, user_lat, user_lng, geocode_fn=None,
                 coords = _BAY_AREA_CITIES[city_name]
                 _geocode_cache[location_str] = (coords[0], coords[1], _time.time())
                 return coords
+
+            # Try extracting city from complex addresses by looking at last
+            # few comma-separated parts (e.g. "Venue, 123 St (in Place), Danville, CA")
+            # Strip parenthetical content first, then try last city-like parts
+            clean_str = _re.sub(r'\([^)]*\)', '', loc_lower)
+            clean_parts = [_re.sub(r'\b(ca|california)\b', '', p).strip() for p in clean_str.split(',')]
+            clean_parts = [p for p in clean_parts if p]
+            # Try from the end (most likely to be city)
+            for part in reversed(clean_parts):
+                # Strip numbers/zip codes to get just the city name
+                city_candidate = _re.sub(r'\b\d{5}(-\d{4})?\b', '', part).strip()
+                city_candidate = _re.sub(r'^\d+\s+', '', city_candidate).strip()
+                if city_candidate in _BAY_AREA_CITIES:
+                    coords = _BAY_AREA_CITIES[city_candidate]
+                    _geocode_cache[location_str] = (coords[0], coords[1], _time.time())
+                    return coords
 
             # Fall back to Nominatim (rate limited: 1 req/sec)
             if not requests:
