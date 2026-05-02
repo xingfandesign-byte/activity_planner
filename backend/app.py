@@ -1919,7 +1919,8 @@ def convert_google_place_to_item(place, user_location, index):
         "rating": place.get('rating', 4.0),
         "total_ratings": place.get('user_ratings_total', 0),
         "photo_url": photo_url,
-        "google_place": True
+        "google_place": True,
+        "source": "Google Places"
     }
 
 
