@@ -2417,6 +2417,185 @@ SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '') or os.environ.get('SMTP_PASS', '')
 EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER or 'noreply@activityplanner.local')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', '').rstrip('/')  # e.g. https://app.example.com
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+
+
+# ========== DIGEST HELPERS ==========
+
+CATEGORY_EMOJI = {
+    'nature': '🌿', 'outdoors': '🌿', 'parks': '🌿', 'hiking': '🌿',
+    'arts': '🎭', 'culture': '🎭', 'museums': '🎭', 'theater': '🎭',
+    'food': '🍕', 'dining': '🍕', 'restaurants': '🍕',
+    'family': '👨‍👩‍👧', 'kids': '👨‍👩‍👧',
+    'events': '🎪', 'festivals': '🎪', 'community': '🎪',
+    'music': '🎵', 'concerts': '🎵',
+    'sports': '⚽', 'fitness': '⚽',
+    'education': '📚', 'workshops': '📚',
+    'nightlife': '🌙', 'shopping': '🛍️',
+}
+
+
+def _get_category_emoji(category):
+    """Return emoji for a category string."""
+    cat = (category or '').lower().strip()
+    for key, emoji in CATEGORY_EMOJI.items():
+        if key in cat:
+            return emoji
+    return '📍'
+
+
+def _get_weather_summary(lat, lng):
+    """Fetch a short weather summary from wttr.in. Returns string or empty."""
+    try:
+        # Reverse to city name isn't needed; wttr.in accepts lat,lng
+        resp = requests.get(f'https://wttr.in/{lat},{lng}?format=%C+%t', timeout=4)
+        if resp.status_code == 200 and resp.text.strip():
+            return resp.text.strip()
+    except Exception:
+        pass
+    return ''
+
+
+def _weekend_date_range():
+    """Return (sat_date, sun_date, label) for the coming weekend."""
+    today = datetime.now()
+    # Saturday = 5 in weekday()
+    days_until_sat = (5 - today.weekday()) % 7
+    if days_until_sat == 0 and today.hour >= 20:
+        days_until_sat = 7
+    sat = today + timedelta(days=days_until_sat)
+    sun = sat + timedelta(days=1)
+    label = f"{sat.strftime('%b %-d')}-{sun.strftime('%-d')}"
+    return sat.date(), sun.date(), label
+
+
+def _why_picked(item, user_lat=None, user_lng=None):
+    """Generate a short 'Why we picked this' line."""
+    parts = []
+    dist = item.get('distance_miles')
+    if dist is not None:
+        parts.append(f"Close to you ({dist}mi)")
+    price = (item.get('price_flag') or '').strip().lower()
+    if price in ('free', '$0', ''):
+        parts.append('Free')
+    cat = (item.get('category') or '').lower()
+    if 'family' in cat or 'kids' in cat or item.get('kid_friendly'):
+        parts.append('Family-friendly')
+    if 'nature' in cat or 'park' in cat or 'outdoor' in cat:
+        parts.append('Outdoors')
+    if not parts:
+        parts.append('Recommended for you')
+    return ' • '.join(parts)
+
+
+def _is_evergreen(item):
+    """Check if item is an evergreen place (park, museum, etc.) vs timed event."""
+    cat = (item.get('category') or '').lower()
+    title = (item.get('title') or '').lower()
+    evergreen_keywords = ['park', 'museum', 'trail', 'garden', 'library', 'beach', 'lake', 'zoo', 'aquarium']
+    return any(kw in cat or kw in title for kw in evergreen_keywords)
+
+
+def _is_free(item):
+    price = (item.get('price_flag') or '').strip().lower()
+    return price in ('free', '$0', '')
+
+
+def get_weekend_digest_items(user_lat, user_lng, preferences, max_items=5):
+    """Smart selection of digest items with diversity constraints."""
+    from local_feeds import get_local_feed_recommendations
+
+    # Fetch more than needed for selection
+    all_items = get_local_feed_recommendations(
+        profile=preferences,
+        user_lat=user_lat,
+        user_lng=user_lng,
+        geocode_fn=geocode_to_lat_lng,
+        max_items=10
+    )
+    if not all_items:
+        return []
+
+    sat, sun, _ = _weekend_date_range()
+    today = datetime.now().date()
+    max_future = today + timedelta(days=7)
+
+    # Filter: weekend events, evergreen, or within 7 days
+    filtered = []
+    for item in all_items:
+        event_date_str = item.get('event_date') or ''
+        if event_date_str:
+            try:
+                ed = datetime.fromisoformat(event_date_str.replace('Z', '+00:00')).date()
+                if ed < today:
+                    continue  # already passed
+                if ed > max_future:
+                    continue  # too far away
+            except Exception:
+                pass
+        if _is_evergreen(item):
+            filtered.append(item)
+        elif event_date_str:
+            filtered.append(item)
+        else:
+            filtered.append(item)  # keep general recommendations too
+
+    if not filtered:
+        filtered = all_items[:max_items]
+
+    # Diversity selection
+    selected = []
+    source_count = {}
+    has_dated = False
+    has_free = False
+    categories_used = set()
+
+    def _add(item):
+        nonlocal has_dated, has_free
+        selected.append(item)
+        src = item.get('feed_source') or item.get('source', 'unknown')
+        source_count[src] = source_count.get(src, 0) + 1
+        if item.get('event_date'):
+            has_dated = True
+        if _is_free(item):
+            has_free = True
+        categories_used.add((item.get('category') or '').lower())
+
+    def _can_add(item):
+        src = item.get('feed_source') or item.get('source', 'unknown')
+        if source_count.get(src, 0) >= 2:
+            return False
+        return True
+
+    # First pass: ensure at least 1 dated event and 1 free item
+    for item in filtered:
+        if len(selected) >= max_items:
+            break
+        if not has_dated and item.get('event_date') and _can_add(item):
+            _add(item)
+            continue
+        if not has_free and _is_free(item) and _can_add(item):
+            _add(item)
+            continue
+
+    # Second pass: fill remaining with diversity
+    for item in filtered:
+        if len(selected) >= max_items:
+            break
+        if item in selected:
+            continue
+        if not _can_add(item):
+            continue
+        _add(item)
+
+    # Fallback: if still under, add without constraints
+    for item in filtered:
+        if len(selected) >= max_items:
+            break
+        if item not in selected:
+            _add(item)
+
+    return selected
 
 
 def send_password_reset_email(to_email, reset_link):
@@ -2514,7 +2693,17 @@ def send_friday_digest_email(to_email, user_name, recommendations, frontend_url)
         return False
     
     greeting = f"Hi {user_name}," if user_name else "Hi,"
-    subject = "🎉 Your Activity Planner Digest - Top Picks for You!"
+    _, _, weekend_label = _weekend_date_range()
+    subject = f"🎉 Your Weekend Picks: {weekend_label}"
+    
+    # Try to get weather
+    first_rec = recommendations[0] if recommendations else {}
+    weather = _get_weather_summary(
+        first_rec.get('lat', 37.5485),
+        first_rec.get('lng', -121.9886)
+    )
+    
+    base_url = frontend_url or 'https://activityplanner.local'
     
     # Build recommendation list for plain text
     rec_text_list = []
@@ -2523,19 +2712,23 @@ def send_friday_digest_email(to_email, user_name, recommendations, frontend_url)
         distance = rec.get('distance_display', 'n/a')
         address = rec.get('address', '')
         event_date = rec.get('event_date', '')
-        rec_text_list.append(f"{i}. {title}\n   📍 {address or 'Location TBD'}\n   🚗 {distance}")
+        emoji = _get_category_emoji(rec.get('category', ''))
+        why = _why_picked(rec)
+        date_line = f"\n   📅 {event_date}" if event_date else ""
+        rec_text_list.append(f"{i}. {emoji} {title}{date_line}\n   📍 {address or 'Location TBD'} • {distance}\n   💡 {why}")
     
     rec_text = "\n\n".join(rec_text_list)
+    weather_text = f"\n☁️ Weather: {weather}\n" if weather else ""
     
     text = f"""{greeting}
 
-Here are your personalized activity recommendations! 🌟
-
+Here are your weekend picks! 🌟
+{weather_text}
 {rec_text}
 
 Ready to plan? Visit Activity Planner to see more details and add events to your calendar.
 
-{frontend_url or 'https://activityplanner.local'}
+{base_url}
 
 Happy exploring!
 — The Activity Planner Team
@@ -2545,6 +2738,14 @@ You're receiving this because you signed up for Activity Planner digests.
 """
 
     # Build HTML version
+    weather_html = ''
+    if weather:
+        weather_html = f'''
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 12px; padding: 16px; margin-bottom: 20px; color: white; text-align: center;">
+            <p style="margin: 0; font-size: 18px;">☀️ {weather}</p>
+        </div>
+        '''
+    
     rec_html_items = []
     for rec in recommendations[:5]:
         title = rec.get('title', 'Event')
@@ -2553,24 +2754,45 @@ You're receiving this because you signed up for Activity Planner digests.
         event_date = rec.get('event_date', '')
         description = (rec.get('description') or rec.get('explanation') or '')[:150]
         event_link = rec.get('event_link', '')
+        category = rec.get('category', '')
+        emoji = _get_category_emoji(category)
+        why = _why_picked(rec)
+        place_id = rec.get('place_id') or rec.get('id', '')
+        save_link = f"{base_url}/save/{place_id}" if place_id else ''
         
-        # Format date if present
+        # Format date prominently if present
         date_html = ''
         if event_date:
             try:
                 from datetime import datetime as dt
                 date_obj = dt.fromisoformat(event_date.replace('Z', '+00:00'))
-                date_html = f'<span style="color: #6366f1; font-size: 14px;">📅 {date_obj.strftime("%a, %b %d at %I:%M %p")}</span><br>'
+                date_html = f'<div style="background: #6366f1; color: white; display: inline-block; padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; margin-bottom: 8px;">📅 {date_obj.strftime("%a, %b %d at %I:%M %p")}</div><br>'
             except:
-                date_html = f'<span style="color: #6366f1; font-size: 14px;">📅 {event_date}</span><br>'
+                date_html = f'<div style="background: #6366f1; color: white; display: inline-block; padding: 4px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; margin-bottom: 8px;">📅 {event_date}</div><br>'
+        
+        # Category badge
+        badge_html = f'<span style="background: #f0f0ff; color: #6366f1; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500;">{emoji} {category.title() if category else "Activity"}</span>'
+        
+        # Why picked line
+        why_html = f'<p style="margin: 8px 0 0 0; color: #888; font-size: 12px; font-style: italic;">💡 {why}</p>'
+        
+        # Quick save link
+        save_html = f'<a href="{save_link}" style="color: #6366f1; text-decoration: none; font-size: 13px; font-weight: 500;">💾 Quick Save</a>' if save_link else ''
+        
+        links_html = ' &nbsp;|&nbsp; '.join(filter(None, [
+            f'<a href="{event_link}" style="color: #6366f1; text-decoration: none; font-size: 13px;">View event →</a>' if event_link else '',
+            save_html
+        ]))
         
         rec_html_items.append(f'''
         <div style="background: #f9fafb; border-radius: 12px; padding: 16px; margin-bottom: 16px;">
-            <h3 style="margin: 0 0 8px 0; color: #111; font-size: 18px;">{title}</h3>
+            {badge_html}
+            <h3 style="margin: 8px 0 8px 0; color: #111; font-size: 18px;">{emoji} {title}</h3>
             {date_html}
             <p style="margin: 8px 0; color: #555; font-size: 14px;">{description}</p>
             <p style="margin: 8px 0; color: #666; font-size: 13px;">📍 {address or 'Location TBD'} &nbsp;|&nbsp; 🚗 {distance}</p>
-            {f'<a href="{event_link}" style="color: #6366f1; text-decoration: none; font-size: 14px;">View event →</a>' if event_link else ''}
+            {links_html}
+            {why_html}
         </div>
         ''')
     
@@ -2585,17 +2807,19 @@ You're receiving this because you signed up for Activity Planner digests.
     </head>
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
         <div style="text-align: center; margin-bottom: 24px;">
-            <h1 style="color: #6366f1; margin: 0;">🎉 Activity Planner</h1>
-            <p style="color: #666; margin: 8px 0 0 0;">Your personalized activity digest</p>
+            <h1 style="color: #6366f1; margin: 0;">🎉 Your Weekend Picks: {weekend_label}</h1>
+            <p style="color: #666; margin: 8px 0 0 0;">Curated activities just for you</p>
         </div>
         
+        {weather_html}
+        
         <p style="font-size: 16px;">{greeting}</p>
-        <p style="font-size: 16px;">Here are your top activity picks! 🌟</p>
+        <p style="font-size: 16px;">Here are your top picks for this weekend! 🌟</p>
         
         {rec_html}
         
         <div style="text-align: center; margin-top: 24px;">
-            <a href="{frontend_url or 'https://activityplanner.local'}" style="display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 500;">View All Recommendations</a>
+            <a href="{base_url}" style="display: inline-block; background: #6366f1; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 500;">View All Recommendations</a>
         </div>
         
         <p style="margin-top: 32px; font-size: 16px;">Happy exploring!<br>— The Activity Planner Team</p>
@@ -2629,8 +2853,6 @@ You're receiving this because you signed up for Activity Planner digests.
 
 def send_all_friday_digests():
     """Send Friday digest emails to all users with preferences. Returns count of emails sent."""
-    from local_feeds import get_local_feed_recommendations
-    
     users = db.get_all_users_with_preferences()
     sent_count = 0
     
@@ -2651,11 +2873,10 @@ def send_all_friday_digests():
             user_lat = user_location.get('lat') or 37.5485  # Default: Fremont, CA
             user_lng = user_location.get('lng') or -121.9886
             
-            recommendations = get_local_feed_recommendations(
-                profile=preferences,
+            recommendations = get_weekend_digest_items(
                 user_lat=user_lat,
                 user_lng=user_lng,
-                geocode_fn=geocode_to_lat_lng,
+                preferences=preferences,
                 max_items=5
             )
             
@@ -2668,6 +2889,168 @@ def send_all_friday_digests():
     
     print(f"[DIGEST] Completed. Sent {sent_count} digest emails.")
     return sent_count
+
+
+def format_digest_telegram(items, user_lat=None, user_lng=None):
+    """Format digest items as a Telegram message string."""
+    _, _, weekend_label = _weekend_date_range()
+    weather = _get_weather_summary(user_lat or 37.5485, user_lng or -121.9886)
+
+    lines = [f"🎉 Weekend Picks: {weekend_label}", ""]
+    if weather:
+        lines.append(f"☀️ {weather}")
+        lines.append("")
+
+    base_url = FRONTEND_URL or 'https://activityplanner.local'
+
+    for i, item in enumerate(items[:5], 1):
+        title = item.get('title', 'Event')
+        emoji = _get_category_emoji(item.get('category', ''))
+        dist = item.get('distance_miles')
+        dist_str = f"{dist}mi away" if dist else ''
+        price = (item.get('price_flag') or '').strip()
+        price_str = price if price else ''
+        location_parts = [p for p in [dist_str, price_str] if p]
+        location_line = ' • '.join(location_parts)
+
+        place_id = item.get('place_id') or item.get('id', '')
+        link = item.get('event_link') or (f"{base_url}/place/{place_id}" if place_id else '')
+        title_text = f"[{title}]({link})" if link else title
+
+        lines.append(f"{i}. {emoji} {title_text}")
+
+        event_date = item.get('event_date', '')
+        if event_date:
+            try:
+                from datetime import datetime as dt
+                ed = dt.fromisoformat(event_date.replace('Z', '+00:00'))
+                lines.append(f"   📅 {ed.strftime('%a %b %-d, %-I%p')}")
+            except Exception:
+                lines.append(f"   📅 {event_date}")
+
+        if location_line:
+            lines.append(f"   📍 {location_line}")
+
+        desc = (item.get('description') or item.get('explanation') or '')[:100]
+        if desc:
+            lines.append(f"   {desc}")
+        lines.append("")
+
+    lines.append("💡 Tap any title to open in Activity Planner")
+    return "\n".join(lines)
+
+
+def send_digest_telegram(user_id, items, chat_id=None):
+    """Send digest to a user via Telegram. Returns True on success."""
+    if not TELEGRAM_BOT_TOKEN:
+        print("[TELEGRAM] Bot token not configured")
+        return False
+
+    if not chat_id:
+        # Try to get chat_id from user preferences
+        prefs = db.get_preferences(user_id) or {}
+        chat_id = prefs.get('telegram_chat_id')
+    if not chat_id:
+        print(f"[TELEGRAM] No chat_id for user {user_id}")
+        return False
+
+    text = format_digest_telegram(items)
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f"[TELEGRAM] Digest sent to chat {chat_id}")
+            return True
+        else:
+            print(f"[TELEGRAM] Failed: {resp.text}")
+            return False
+    except Exception as e:
+        print(f"[TELEGRAM] Error: {e}")
+        return False
+
+
+@app.route('/v1/digest/preview', methods=['GET', 'POST'])
+@require_auth
+def digest_preview():
+    """Preview the weekly digest in various formats."""
+    user_id = get_user_id()
+    fmt = request.args.get('format', 'json')
+    prefs = db.get_preferences(user_id) or {}
+
+    user_location = prefs.get('location') or prefs.get('home_location') or {}
+    if isinstance(user_location, dict):
+        user_lat = user_location.get('lat') or 37.5485
+        user_lng = user_location.get('lng') or -121.9886
+    else:
+        user_lat, user_lng = 37.5485, -121.9886
+
+    items = get_weekend_digest_items(user_lat, user_lng, prefs, max_items=5)
+
+    if fmt == 'telegram':
+        text = format_digest_telegram(items, user_lat, user_lng)
+        return text, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    elif fmt == 'email':
+        # Return the HTML email preview
+        _, _, weekend_label = _weekend_date_range()
+        weather = _get_weather_summary(user_lat, user_lng)
+        # Build a minimal preview — reuse the email builder logic
+        from io import StringIO
+        # Just return item summaries in a simple HTML format
+        html_parts = [f"<h2>🎉 Weekend Picks: {weekend_label}</h2>"]
+        if weather:
+            html_parts.append(f"<p>☀️ {weather}</p>")
+        for i, item in enumerate(items, 1):
+            emoji = _get_category_emoji(item.get('category', ''))
+            html_parts.append(f"<h3>{i}. {emoji} {item.get('title', 'Event')}</h3>")
+            html_parts.append(f"<p>{_why_picked(item)}</p>")
+        return "\n".join(html_parts), 200, {'Content-Type': 'text/html; charset=utf-8'}
+    else:
+        return jsonify({
+            'weekend': _weekend_date_range()[2],
+            'items': items,
+            'count': len(items)
+        })
+
+
+@app.route('/v1/digest/send', methods=['POST'])
+@require_auth
+def digest_send():
+    """Trigger digest generation and delivery for the authenticated user."""
+    user_id = get_user_id()
+    data = request.json or {}
+    channel = data.get('channel', 'email')  # email | telegram | both
+    prefs = db.get_preferences(user_id) or {}
+
+    user_location = prefs.get('location') or prefs.get('home_location') or {}
+    if isinstance(user_location, dict):
+        user_lat = user_location.get('lat') or 37.5485
+        user_lng = user_location.get('lng') or -121.9886
+    else:
+        user_lat, user_lng = 37.5485, -121.9886
+
+    items = get_weekend_digest_items(user_lat, user_lng, prefs, max_items=5)
+    if not items:
+        return jsonify({'error': 'No recommendations available'}), 404
+
+    results = {}
+    user_info = db.get_user(user_id) if hasattr(db, 'get_user') else {}
+    user_email = (user_info or {}).get('email', '') if user_info else ''
+    user_name = (user_info or {}).get('name', '') if user_info else ''
+
+    if channel in ('email', 'both'):
+        if user_email:
+            results['email'] = send_friday_digest_email(user_email, user_name, items, FRONTEND_URL)
+        else:
+            results['email'] = False
+            results['email_error'] = 'No email on file'
+
+    if channel in ('telegram', 'both'):
+        results['telegram'] = send_digest_telegram(user_id, items)
+
+    return jsonify({'sent': results, 'items_count': len(items)})
 
 
 @app.route('/v1/auth/signup', methods=['POST'])
