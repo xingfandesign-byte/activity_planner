@@ -1557,7 +1557,22 @@ def search_google_places(location, category, radius_meters=10000):
         'events': 'event_venue',
         'shopping': 'shopping_mall',
         'entertainment': 'movie_theater',
-        'nature': 'natural_feature'
+        'nature': 'natural_feature',
+        'playground': 'playground',
+        'zoo': 'zoo',
+        'aquarium': 'aquarium',
+        'botanical_garden': 'park',
+        'farm': 'farm',
+        'bowling_alley': 'bowling_alley',
+        'trampoline_park': 'amusement_park',
+        'mini_golf': 'amusement_park',
+        'skating_rink': 'stadium',
+        'water_park': 'amusement_park',
+        'amusement_park': 'amusement_park',
+        'trail': 'park',
+        'nature_preserve': 'natural_feature',
+        'community_center': 'community_center',
+        'recreation_center': 'gym',
     }
     
     place_type = category_to_type.get(category, 'point_of_interest')
@@ -1919,7 +1934,8 @@ def convert_google_place_to_item(place, user_location, index):
         "rating": place.get('rating', 4.0),
         "total_ratings": place.get('user_ratings_total', 0),
         "photo_url": photo_url,
-        "google_place": True
+        "google_place": True,
+        "source": "Google Places"
     }
 
 
