@@ -2919,19 +2919,31 @@ def format_digest_telegram(items, user_lat=None, user_lng=None):
 
         lines.append(f"{i}. {emoji} {title_text}")
 
-        event_date = item.get('event_date', '')
+        event_date = item.get('event_date') or item.get('pub_date') or ''
         if event_date:
             try:
                 from datetime import datetime as dt
-                ed = dt.fromisoformat(event_date.replace('Z', '+00:00'))
-                lines.append(f"   📅 {ed.strftime('%a %b %-d, %-I%p')}")
+                # Handle various date formats
+                ed_str = str(event_date).strip()
+                if 'T' in ed_str:
+                    ed = dt.fromisoformat(ed_str.replace('Z', '+00:00'))
+                else:
+                    # Try parsing RFC 2822 style dates
+                    from email.utils import parsedate_to_datetime
+                    ed = parsedate_to_datetime(ed_str)
+                lines.append(f"   📅 {ed.strftime('%a %b %-d, %-I:%M%p')}")
             except Exception:
-                lines.append(f"   📅 {event_date}")
+                pass  # Skip unparseable dates
 
         if location_line:
             lines.append(f"   📍 {location_line}")
 
-        desc = (item.get('description') or item.get('explanation') or '')[:100]
+        # Clean HTML from descriptions
+        desc = (item.get('description') or item.get('explanation') or '')
+        desc = re.sub(r'<[^>]+>', ' ', desc)  # Strip HTML tags
+        desc = re.sub(r'&[^;]+;', ' ', desc)  # Strip HTML entities
+        desc = re.sub(r'\s+', ' ', desc).strip()
+        desc = desc[:100]
         if desc:
             lines.append(f"   {desc}")
         lines.append("")
