@@ -7,6 +7,7 @@ All items are normalized to the same shape as recommendation items for merging.
 import os
 import re
 import hashlib
+import html as html_lib
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -37,6 +38,25 @@ TRIPADVISOR_API_KEY = os.environ.get("TRIPADVISOR_API_KEY", "").strip() or None
 # Cache for crawled event descriptions
 _description_cache = {}  # key: url -> {"description": str, "timestamp": datetime}
 DESCRIPTION_CACHE_TTL_SECONDS = 86400  # 24 hours
+
+
+def _clean_html_text(value, max_length=None):
+    """Convert feed HTML fragments into compact plain text."""
+    if value is None:
+        return ""
+
+    text = str(value)
+    if not text:
+        return ""
+
+    text = re.sub(r'<\s*(br|/p|/li|/div)\s*/?>', ' ', text, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = html_lib.unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    if max_length and len(text) > max_length:
+        return text[:max_length].rstrip()
+    return text
 
 
 def fetch_event_description(url, timeout=5):
@@ -1481,8 +1501,9 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         if lat is None:
             lat, lng = user_lat, user_lng
     place_id = item.get("place_id") or f"feed_{hashlib.md5((link or title).encode()).hexdigest()[:12]}"
-    # Use description from feed if available, otherwise generic source attribution
-    description = (item.get("description") or "").strip()
+    # Use description from feed if available, otherwise generic source attribution.
+    # RSS/Event feeds often provide HTML fragments; API consumers expect plain text.
+    description = _clean_html_text(item.get("description") or "", max_length=1000)
     
     # Skip description crawling during initial load (adds 1 HTTP request per item, slows recommendations)
     # Crawling can be enabled by passing skip_description_crawl=False
