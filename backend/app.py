@@ -1051,6 +1051,497 @@ def enrich_items_with_images(items, max_time_seconds=4):
     return enriched_items
 
 
+def _parse_event_datetime(event_date):
+    """Parse common event date formats without requiring optional dependencies."""
+    if not event_date:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+
+        value = str(event_date).strip()
+        if not value:
+            return None
+
+        normalized = value.replace('Z', '+00:00')
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            pass
+
+        try:
+            return parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            pass
+
+        for fmt in (
+            "%Y-%m-%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%a, %d %b %Y %H:%M:%S",
+        ):
+            try:
+                return datetime.strptime(value, fmt)
+            except (ValueError, TypeError):
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def _item_search_text(item):
+    return " ".join([
+        str(item.get('title') or item.get('name') or ''),
+        str(item.get('description') or item.get('explanation') or ''),
+        str(item.get('category') or ''),
+        str(item.get('address') or ''),
+        str(item.get('source') or item.get('feed_source') or ''),
+    ]).lower()
+
+
+def _recommendation_time_bucket(item):
+    event_dt = _parse_event_datetime(item.get('event_date') or item.get('pub_date'))
+    if not event_dt:
+        return "anytime"
+    hour = event_dt.hour
+    if 5 <= hour < 12:
+        part = "morning"
+    elif 12 <= hour < 17:
+        part = "afternoon"
+    elif 17 <= hour < 22:
+        part = "evening"
+    else:
+        part = "late"
+    return f"{event_dt.strftime('%a')}-{part}"
+
+
+def _recommendation_source(item):
+    return item.get('feed_source') or item.get('source') or item.get('type') or 'unknown'
+
+
+def _recommendation_category(item):
+    return item.get('category') or 'events'
+
+
+def _has_unknown_distance(item):
+    return item.get('distance_miles') is None or item.get('distance_is_na')
+
+
+def _is_estimated_distance(item):
+    return bool(item.get('distance_is_estimated')) and item.get('distance_miles') is not None
+
+
+def _normalize_budget_value(value):
+    if isinstance(value, dict):
+        max_budget = value.get('max')
+        if max_budget == 0:
+            return 'free'
+        if isinstance(max_budget, (int, float)):
+            if max_budget <= 20:
+                return 'low'
+            if max_budget <= 75:
+                return 'moderate'
+            return 'flexible'
+        return 'moderate'
+    return str(value or 'moderate').lower()
+
+
+def _price_level(price_flag):
+    price = str(price_flag or '').strip().lower()
+    if price in ('free', '$0', '0'):
+        return 0
+    if price == '$':
+        return 1
+    if price == '$$':
+        return 2
+    if price == '$$$':
+        return 3
+    return 1
+
+
+def _interest_keywords(interests):
+    keyword_map = {
+        "arts_culture": ["art", "arts", "culture", "museum", "gallery", "theater", "exhibit", "dance"],
+        "nature": ["nature", "park", "outdoor", "hike", "trail", "garden", "beach", "sunset"],
+        "food_drinks": ["food", "drink", "coffee", "restaurant", "brunch", "dinner", "market", "tasting"],
+        "food_drink": ["food", "drink", "coffee", "restaurant", "brunch", "dinner", "market", "tasting"],
+        "adventure": ["adventure", "sports", "active", "climb", "kayak", "hike", "run"],
+        "learning": ["learning", "workshop", "class", "lecture", "library", "science", "book", "tech"],
+        "entertainment": ["entertainment", "music", "concert", "show", "comedy", "movie", "festival"],
+        "relaxation": ["relaxation", "wellness", "spa", "yoga", "meditation", "garden"],
+        "shopping": ["shopping", "market", "boutique", "vintage", "flea"],
+        "events": ["event", "festival", "community", "fair"],
+        "family": ["family", "kid", "kids", "children", "storytime", "playground"],
+    }
+    keywords = set()
+    for interest in interests or []:
+        keywords.update(keyword_map.get(interest, [interest]))
+    return keywords
+
+
+def _is_ineligible_for_group(item, prefs):
+    group_type = (prefs.get('group_type') or '').lower()
+    if group_type not in ('family', 'couple'):
+        return False
+
+    text = _item_search_text(item)
+    singles_keywords = ["singles", "dating", "speed date", "mixer", "matchmak", "single mingle"]
+    adult_keywords = ["21+", "18+", "adults only", "cocktail crawl", "bar crawl"]
+    professional_keywords = ["founder", "hackathon", "venture capital", "networking", "pitch night"]
+
+    if any(kw in text for kw in singles_keywords):
+        return True
+    if group_type == 'family' and any(kw in text for kw in adult_keywords + professional_keywords):
+        return True
+    return False
+
+
+def _filter_recommendation_candidates(items, prefs, user_id):
+    """Eligibility and dedupe stage before scoring."""
+    max_travel = get_max_travel_time(prefs.get('travel_time_ranges', []))
+    max_radius = get_max_radius_miles(prefs.get('travel_time_ranges', []))
+    now = datetime.now()
+    filtered_items = []
+    stats = {
+        "input": len(items),
+        "past": 0,
+        "travel": 0,
+        "distance": 0,
+        "visited": 0,
+        "duplicate": 0,
+        "test": 0,
+        "group": 0,
+        "no_location": 0,
+    }
+    seen_place_ids = set()
+    seen_title_keys = set()
+
+    for item in items:
+        title = item.get('title') or item.get('name') or ''
+        if re.match(r'^test\s*[-–—:]', title, re.IGNORECASE):
+            stats["test"] += 1
+            continue
+
+        event_dt = _parse_event_datetime(item.get('event_date'))
+        if event_dt:
+            event_cmp = event_dt.replace(tzinfo=None) if event_dt.tzinfo else event_dt
+            if event_cmp < now:
+                stats["past"] += 1
+                continue
+
+        if _is_ineligible_for_group(item, prefs):
+            stats["group"] += 1
+            continue
+
+        travel_time = item.get('travel_time_min')
+        if travel_time and isinstance(travel_time, (int, float)) and travel_time > max_travel:
+            stats["travel"] += 1
+            continue
+
+        distance = item.get('distance_miles')
+        if distance and isinstance(distance, (int, float)) and distance > max_radius:
+            stats["distance"] += 1
+            continue
+
+        if _has_unknown_distance(item):
+            has_location_hint = bool(item.get('address') or item.get('google_maps_url') or item.get('source_url') or item.get('event_link'))
+            if not has_location_hint:
+                stats["no_location"] += 1
+                continue
+
+        place_id = item.get('place_id')
+        if place_id and should_dedup(place_id, user_id, prefs):
+            stats["visited"] += 1
+            continue
+        if place_id and place_id in seen_place_ids:
+            stats["duplicate"] += 1
+            continue
+        if place_id:
+            seen_place_ids.add(place_id)
+
+        title_key = re.sub(r'[^a-z0-9]', '', title.lower())
+        if title_key and title_key in seen_title_keys:
+            stats["duplicate"] += 1
+            continue
+        if title_key:
+            seen_title_keys.add(title_key)
+
+        filtered_items.append(item)
+
+    stats["eligible"] = len(filtered_items)
+    return filtered_items, stats
+
+
+def _score_recommendation_item(item, prefs, user_affinity, now=None):
+    """Return total score and score parts for one candidate."""
+    now = now or datetime.now()
+    parts = {}
+    text = _item_search_text(item)
+    category = _recommendation_category(item)
+
+    distance = item.get('distance_miles')
+    if isinstance(distance, (int, float)):
+        if distance <= 3:
+            parts["distance"] = 50
+        elif distance <= 5:
+            parts["distance"] = 42
+        elif distance <= 10:
+            parts["distance"] = 32
+        elif distance <= 15:
+            parts["distance"] = 22
+        elif distance <= 25:
+            parts["distance"] = 10
+        else:
+            parts["distance"] = max(-8, 5 - int(distance / 10))
+        if _is_estimated_distance(item):
+            parts["location_confidence"] = -6
+    else:
+        parts["distance"] = -18
+        parts["location_confidence"] = -12 if item.get('distance_is_na') else -8
+
+    event_dt = _parse_event_datetime(item.get('event_date'))
+    if event_dt:
+        event_cmp = event_dt.replace(tzinfo=None) if event_dt.tzinfo else event_dt
+        days_until = (event_cmp.date() - now.date()).days
+        if days_until == 0:
+            parts["freshness"] = 24
+        elif days_until == 1:
+            parts["freshness"] = 20
+        elif 0 < days_until <= 3:
+            parts["freshness"] = 15
+        elif 3 < days_until <= 7:
+            parts["freshness"] = 10
+        elif 7 < days_until <= 14:
+            parts["freshness"] = 4
+        elif days_until > 30:
+            parts["freshness"] = -8
+        else:
+            parts["freshness"] = 0
+        if event_cmp.weekday() >= 5:
+            parts["weekend_fit"] = 6
+    elif item.get('type') == 'place':
+        parts["freshness"] = 2
+    else:
+        parts["freshness"] = -3
+
+    interest_keywords = _interest_keywords(prefs.get('interests', []))
+    match_count = sum(1 for kw in interest_keywords if kw and kw in text)
+    if category in prefs.get('categories', []):
+        match_count += 1
+    if match_count >= 3:
+        parts["preference_match"] = 24
+    elif match_count == 2:
+        parts["preference_match"] = 16
+    elif match_count == 1:
+        parts["preference_match"] = 9
+
+    group_type = (prefs.get('group_type') or '').lower()
+    if group_type == 'family':
+        parts["group_fit"] = 14 if item.get('kid_friendly') else -10
+    elif group_type == 'couple' and any(kw in text for kw in ["date", "wine", "dinner", "romantic", "couple"]):
+        parts["group_fit"] = 7
+    elif group_type == 'friends' and any(kw in text for kw in ["social", "party", "game", "music", "festival"]):
+        parts["group_fit"] = 7
+
+    budget = _normalize_budget_value(prefs.get('budget'))
+    price_level = _price_level(item.get('price_flag'))
+    if price_level == 0:
+        parts["budget"] = 8
+    elif budget == 'free':
+        parts["budget"] = -24
+    elif budget == 'low' and price_level >= 2:
+        parts["budget"] = -10
+    elif budget in ('moderate', 'flexible') and price_level <= 2:
+        parts["budget"] = 4
+
+    rating = item.get('rating') or 0
+    if isinstance(rating, (int, float)) and rating > 0:
+        parts["rating"] = min(18, round(rating * 3, 1))
+
+    quality = 0
+    if item.get('photo_url'):
+        quality += 5
+    if item.get('source_url') or item.get('event_link') or item.get('google_maps_url'):
+        quality += 4
+    if len(str(item.get('description') or item.get('explanation') or '')) >= 60:
+        quality += 5
+    if item.get('address'):
+        quality += 3
+    if item.get('feed_item') and item.get('feed_source'):
+        quality += 2
+    parts["quality"] = quality
+
+    if user_affinity:
+        affinity_val = user_affinity.get(category, 0.0)
+        parts["affinity"] = round(affinity_val * 18, 1)
+
+    return round(sum(parts.values()), 1), parts
+
+
+def _select_diverse_recommendations(scored_items, max_items=15):
+    """Select ranked items while balancing source, category, time bucket, and unknown-distance items."""
+    final = []
+    used_ids = set()
+    source_counts = {}
+    category_counts = {}
+    time_counts = {}
+    unknown_distance_count = 0
+
+    caps = {
+        "source": max(4, max_items // 3),
+        "category": max(3, max_items // 4),
+        "time": max(4, max_items // 3),
+        "unknown_distance": max(1, max_items // 6),
+    }
+    relaxed_caps = {
+        "source": min(max_items, caps["source"] + 1),
+        "category": min(max_items, caps["category"] + 2),
+        "time": min(max_items, caps["time"] + 2),
+    }
+
+    def can_take(entry, relaxed=False):
+        item = entry["item"]
+        source = _recommendation_source(item)
+        category = _recommendation_category(item)
+        time_bucket = _recommendation_time_bucket(item)
+        unknown_distance = _has_unknown_distance(item)
+
+        source_cap = relaxed_caps["source"] if relaxed else caps["source"]
+        category_cap = relaxed_caps["category"] if relaxed else caps["category"]
+        time_cap = relaxed_caps["time"] if relaxed else caps["time"]
+
+        if source_counts.get(source, 0) >= source_cap:
+            return False
+        if category_counts.get(category, 0) >= category_cap:
+            return False
+        if time_counts.get(time_bucket, 0) >= time_cap:
+            return False
+
+        if not relaxed:
+            if unknown_distance and unknown_distance_count >= caps["unknown_distance"]:
+                return False
+            if unknown_distance and len(final) < min(5, max_items):
+                known_remaining = any(
+                    not _has_unknown_distance(e["item"]) and id(e["item"]) not in used_ids
+                    for e in scored_items
+                )
+                if known_remaining:
+                    return False
+        return True
+
+    def take(entry, relaxed=False):
+        nonlocal unknown_distance_count
+        item = entry["item"]
+        item_id = id(item)
+        if item_id in used_ids:
+            return False
+        if not can_take(entry, relaxed=relaxed):
+            return False
+
+        used_ids.add(item_id)
+        source = _recommendation_source(item)
+        category = _recommendation_category(item)
+        time_bucket = _recommendation_time_bucket(item)
+        source_counts[source] = source_counts.get(source, 0) + 1
+        category_counts[category] = category_counts.get(category, 0) + 1
+        time_counts[time_bucket] = time_counts.get(time_bucket, 0) + 1
+        if _has_unknown_distance(item):
+            unknown_distance_count += 1
+
+        item["_rank_debug"] = {
+            "score": entry["score"],
+            "score_parts": entry["score_parts"],
+            "source": source,
+            "category": category,
+            "time_bucket": time_bucket,
+            "distance_status": "unknown" if _has_unknown_distance(item) else ("estimated" if _is_estimated_distance(item) else "known"),
+            "selection_pass": "relaxed" if relaxed else "diverse",
+        }
+        final.append(item)
+        return True
+
+    for entry in scored_items:
+        if take(entry, relaxed=False) and len(final) >= max_items:
+            break
+
+    if len(final) < max_items:
+        for entry in scored_items:
+            if take(entry, relaxed=True) and len(final) >= max_items:
+                break
+
+    for index, item in enumerate(final, 1):
+        item["_rank_debug"]["rank"] = index
+        item["_rank_debug"]["diversity_counts"] = {
+            "source": source_counts.get(_recommendation_source(item), 0),
+            "category": category_counts.get(_recommendation_category(item), 0),
+            "time_bucket": time_counts.get(_recommendation_time_bucket(item), 0),
+        }
+
+    return final
+
+
+def _rank_recommendation_candidates(items, prefs, user_id, max_items=15):
+    user_affinity = get_user_affinity_scores(user_id)
+    now = datetime.now()
+    scored_items = []
+    for item in items:
+        score, score_parts = _score_recommendation_item(item, prefs, user_affinity, now=now)
+        scored_items.append({
+            "item": item,
+            "score": score,
+            "score_parts": score_parts,
+        })
+
+    scored_items.sort(key=lambda entry: entry["score"], reverse=True)
+    selected_items = _select_diverse_recommendations(scored_items, max_items=max_items)
+    return selected_items, scored_items
+
+
+def _run_recommendation_pipeline(all_items, prefs, user_id, max_items=15):
+    eligible_items, filter_stats = _filter_recommendation_candidates(all_items, prefs, user_id)
+    ranked_items, scored_items = _rank_recommendation_candidates(eligible_items, prefs, user_id, max_items=max_items)
+    debug = {
+        "filter_stats": filter_stats,
+        "candidate_count": len(scored_items),
+        "selected_count": len(ranked_items),
+        "top_candidates": [
+            {
+                "title": entry["item"].get("title"),
+                "score": entry["score"],
+                "score_parts": entry["score_parts"],
+                "source": _recommendation_source(entry["item"]),
+                "category": _recommendation_category(entry["item"]),
+                "distance_status": "unknown" if _has_unknown_distance(entry["item"]) else ("estimated" if _is_estimated_distance(entry["item"]) else "known"),
+            }
+            for entry in scored_items[:20]
+        ],
+    }
+    return ranked_items, debug
+
+
+def _public_recommendation_item(item, include_debug=False):
+    public_item = {k: v for k, v in item.items() if not k.startswith('_')}
+    if include_debug and item.get("_rank_debug"):
+        public_item["score_debug"] = item["_rank_debug"]
+    return public_item
+
+
+def _public_recommendation_items(items, include_debug=False):
+    return [_public_recommendation_item(item, include_debug=include_debug) for item in items]
+
+
+def _ranking_debug_from_items(items):
+    return [
+        {
+            "rec_id": item.get("rec_id"),
+            "title": item.get("title"),
+            **item.get("_rank_debug", {}),
+        }
+        for item in items
+        if item.get("_rank_debug")
+    ]
+
+
 def _fetch_recommendations_live(user_id, prefs, cache_key):
     """
     Live fetch from all sources with fallback chain:
@@ -1141,153 +1632,18 @@ def _fetch_recommendations_live(user_id, prefs, cache_key):
         except Exception as e:
             print(f"[RECOMMENDATIONS] Parallel timeout - continuing with {len(all_items)} items: {e}")
     
-    # Step 4: Merge, deduplicate and rank results
+    # Step 4: Merge, deduplicate, score, and diversify results
     if all_items:
         print(f"[RECOMMENDATIONS] Merging {len(all_items)} items from {len(sources_succeeded)} sources")
         
-        # Filter by user preferences
-        filtered_items = []
-        print(f"[RECOMMENDATIONS] Filtering {len(all_items)} items, max_travel={get_max_travel_time(travel_time_ranges)}, max_radius={get_max_radius_miles(travel_time_ranges)}")
-        now = datetime.now()
-        past_filtered = 0
-        seen_place_ids = set()
-        seen_title_keys = set()
-        dedup_count = 0
-        for item in all_items:
-            # Filter out past events (on or before query date)
-            event_date_str = item.get('event_date')
-            if event_date_str:
-                try:
-                    ed = event_date_str.replace('Z', '+00:00')
-                    # Try ISO format first
-                    try:
-                        event_dt = datetime.fromisoformat(ed)
-                    except (ValueError, AttributeError):
-                        from dateutil import parser as dateutil_parser
-                        event_dt = dateutil_parser.parse(ed)
-                    # Strip timezone for comparison
-                    if event_dt.tzinfo:
-                        event_dt = event_dt.replace(tzinfo=None)
-                    if event_dt < now:
-                        past_filtered += 1
-                        continue
-                except Exception:
-                    pass  # Can't parse date, keep the item
-
-            # Apply travel time filter
-            travel_time = item.get('travel_time_min')
-            if travel_time and isinstance(travel_time, (int, float)):
-                max_travel = get_max_travel_time(travel_time_ranges)
-                if travel_time > max_travel:
-                    continue
-            
-            # Apply distance filter  
-            distance = item.get('distance_miles')
-            if distance and isinstance(distance, (int, float)):
-                max_radius = get_max_radius_miles(travel_time_ranges) 
-                if distance > max_radius:
-                    continue
-            
-            # Apply visited-place deduplication
-            place_id = item.get('place_id')
-            if place_id and should_dedup(place_id, user_id, prefs):
-                continue
-
-            # Cross-source deduplication by place_id
-            if place_id and place_id in seen_place_ids:
-                dedup_count += 1
-                continue
-            if place_id:
-                seen_place_ids.add(place_id)
-
-            # Filter test/draft items
-            title = item.get('title') or item.get('name') or ''
-            if re.match(r'^test\s*[-–—:]', title, re.IGNORECASE):
-                continue
-
-            # Fuzzy title deduplication (normalize to lowercase, strip punctuation/whitespace)
-            title_key = re.sub(r'[^a-z0-9]', '', title.lower())
-            if title_key and title_key in seen_title_keys:
-                dedup_count += 1
-                continue
-            if title_key:
-                seen_title_keys.add(title_key)
-            
-            filtered_items.append(item)
-        
-        if past_filtered:
-            print(f"[RECOMMENDATIONS] Filtered out {past_filtered} past events")
-        if dedup_count:
-            print(f"[RECOMMENDATIONS] Deduplicated {dedup_count} duplicate items")
-        print(f"[RECOMMENDATIONS] After filtering: {len(filtered_items)} items (from {len(all_items)})")
-        
-        # Get user affinity scores for personalized re-ranking
-        user_affinity = get_user_affinity_scores(user_id)
-
-        # Score and rank all items together
-        def _item_score(item):
-            score = 0
-            # Distance is the primary ranking factor — closer is much better
-            d = item.get('distance_miles')
-            if d is not None:
-                # Continuous distance penalty: max 50 points for 0 miles, drops off
-                if d <= 3:
-                    score += 50
-                elif d <= 5:
-                    score += 40
-                elif d <= 10:
-                    score += 30
-                elif d <= 15:
-                    score += 20
-                elif d <= 25:
-                    score += 10
-                else:
-                    score += max(0, 5 - int(d / 20))
-            else:
-                # No distance data — slight penalty to rank below known-nearby items
-                score -= 5
-            # Rating bonus
-            score += (item.get('rating', 0) or 0) * 5
-            # Events with dates are more actionable
-            if item.get('event_date'):
-                score += 5
-            # Kid-friendly bonus if applicable
-            if kid_friendly and item.get('kid_friendly'):
-                score += 10
-            # Free is a plus
-            if (item.get('price_flag') or '').lower() == 'free':
-                score += 3
-            # Personalization: apply affinity multiplier
-            if user_affinity:
-                cat = item.get('category', '')
-                affinity_val = user_affinity.get(cat, 0.0)
-                # Affinity ranges [-1, 1], apply as bonus/penalty (up to ±15 points)
-                score += affinity_val * 15
-            return score
-        
-        filtered_items.sort(key=_item_score, reverse=True)
-        
-        # Take top 15 items with source diversity
-        final_items = []
-        source_counts = {}
-        max_per_source = 6
-        
-        for item in filtered_items:
-            src = item.get('feed_source') or item.get('type', 'unknown')
-            if source_counts.get(src, 0) >= max_per_source:
-                continue
-            source_counts[src] = source_counts.get(src, 0) + 1
-            final_items.append(item)
-            if len(final_items) >= 15:
-                break
-        
-        # Fill remaining if needed
-        if len(final_items) < 15:
-            for item in filtered_items:
-                if item not in final_items:
-                    final_items.append(item)
-                    if len(final_items) >= 15:
-                        break
+        print(
+            f"[RECOMMENDATIONS] Pipeline filtering {len(all_items)} items, "
+            f"max_travel={get_max_travel_time(travel_time_ranges)}, "
+            f"max_radius={get_max_radius_miles(travel_time_ranges)}"
+        )
+        final_items, pipeline_debug = _run_recommendation_pipeline(all_items, prefs, user_id, max_items=15)
+        print(f"[RECOMMENDATIONS] Pipeline stats: {pipeline_debug.get('filter_stats')}")
+        print(f"[RECOMMENDATIONS] Selected {len(final_items)} diversified items from {pipeline_debug.get('candidate_count')} scored candidates")
         
         # Step 5: Enrich items with real images (parallel, max 2s)
         print(f"[RECOMMENDATIONS] Enriching {len(final_items)} items with images...")
@@ -1483,6 +1839,7 @@ def get_digest():
     _request_start = _time.time()
     user_id = get_user_id()
     prefs = db.get_preferences(user_id) or {}
+    include_debug = str(request.args.get('debug', '')).lower() in ('1', 'true', 'yes')
     
     # Use defaults if no preferences set
     if not prefs:
@@ -1515,11 +1872,13 @@ def get_digest():
         response_data = {
             "week": week,
             "generated_at": datetime.now().isoformat(),
-            "items": items,
+            "items": _public_recommendation_items(items, include_debug=include_debug),
             "sources": sources,  # Show which sources were used
             "from_cache": 'cache' in sources,
             "response_time_ms": elapsed_ms
         }
+        if include_debug:
+            response_data["ranking_debug"] = _ranking_debug_from_items(items)
         
         print(f"[DIGEST] Returning {len(items)} items from sources: {', '.join(sources)} in {elapsed_ms}ms")
         resp = jsonify(response_data)
@@ -2007,6 +2366,7 @@ def get_ai_recommendations():
     data = request.json
     profile = data.get('profile', {})
     prompt = data.get('prompt', '')
+    include_debug = bool(data.get('debug'))
     
     # Get user_id for deduplication and caching
     user_id = get_user_id()
@@ -2054,10 +2414,12 @@ def get_ai_recommendations():
             "generated_at": datetime.now().isoformat(),
             "ai_powered": True,
             "sources": sources,
-            "items": items,
+            "items": _public_recommendation_items(items, include_debug=include_debug),
             "from_cache": 'cache' in sources,
             "response_time_ms": elapsed_ms
         }
+        if include_debug:
+            response_data["ranking_debug"] = _ranking_debug_from_items(items)
         
         print(f"[AI] Returning {len(items)} recommendations from sources: {', '.join(sources)} in {elapsed_ms}ms")
         resp = jsonify(response_data)
