@@ -51,6 +51,7 @@ def init_db():
                 visited_at TEXT NOT NULL,
                 signal_type TEXT DEFAULT 'manual',
                 confidence REAL DEFAULT 1.0,
+                category TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_visited_user ON visited_history(user_id);
@@ -60,6 +61,7 @@ def init_db():
                 user_id TEXT NOT NULL,
                 place_id TEXT NOT NULL,
                 saved_at TEXT NOT NULL,
+                category TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_places(user_id);
@@ -71,6 +73,7 @@ def init_db():
                 rec_id TEXT NOT NULL,
                 recommended_at TEXT NOT NULL,
                 week TEXT NOT NULL,
+                category TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_recent_user ON recent_recommendations(user_id);
@@ -151,6 +154,13 @@ def init_db():
             c.execute("SELECT email_verified FROM users LIMIT 1")
         except sqlite3.OperationalError:
             c.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+    # Add category columns if missing (migration for existing DBs)
+    with get_conn() as c:
+        for table in ('visited_history', 'saved_places', 'recent_recommendations'):
+            try:
+                c.execute(f"SELECT category FROM {table} LIMIT 1")
+            except sqlite3.OperationalError:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN category TEXT")
     print(f"[DB] Initialized SQLite at {DB_PATH}")
 
 
@@ -288,27 +298,29 @@ def set_preferences(user_id, prefs):
 def get_visited_list(user_id):
     with get_conn() as c:
         rows = c.execute(
-            "SELECT place_id, visited_at, signal_type, confidence FROM visited_history WHERE user_id = ? ORDER BY visited_at DESC",
+            "SELECT place_id, visited_at, signal_type, confidence, category FROM visited_history WHERE user_id = ? ORDER BY visited_at DESC",
             (user_id,)
         ).fetchall()
     return [
-        {"place_id": r["place_id"], "visited_at": r["visited_at"], "signal_type": r["signal_type"], "confidence": r["confidence"]}
+        {"place_id": r["place_id"], "visited_at": r["visited_at"], "signal_type": r["signal_type"], "confidence": r["confidence"], "category": r["category"]}
         for r in rows
     ]
 
 
-def add_visited(user_id, place_id, visited_at=None, signal_type="manual", confidence=1.0):
+def add_visited(user_id, place_id, visited_at=None, signal_type="manual", confidence=1.0, category=None):
     visited_at = visited_at or datetime.now().isoformat()
     with get_conn() as c:
         c.execute(
-            "INSERT INTO visited_history (user_id, place_id, visited_at, signal_type, confidence) VALUES (?, ?, ?, ?, ?)",
-            (user_id, place_id, visited_at, signal_type, confidence)
+            "INSERT INTO visited_history (user_id, place_id, visited_at, signal_type, confidence, category) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, place_id, visited_at, signal_type, confidence, category)
         )
+    invalidate_affinity_cache(user_id)
 
 
 def remove_visited(user_id, place_id):
     with get_conn() as c:
         c.execute("DELETE FROM visited_history WHERE user_id = ? AND place_id = ?", (user_id, place_id))
+    invalidate_affinity_cache(user_id)
 
 
 def visited_contains(user_id, place_id):
@@ -321,24 +333,26 @@ def visited_contains(user_id, place_id):
 def get_saved_list(user_id):
     with get_conn() as c:
         rows = c.execute(
-            "SELECT place_id, saved_at FROM saved_places WHERE user_id = ? ORDER BY saved_at DESC",
+            "SELECT place_id, saved_at, category FROM saved_places WHERE user_id = ? ORDER BY saved_at DESC",
             (user_id,)
         ).fetchall()
-    return [{"place_id": r["place_id"], "saved_at": r["saved_at"]} for r in rows]
+    return [{"place_id": r["place_id"], "saved_at": r["saved_at"], "category": r["category"]} for r in rows]
 
 
-def add_saved(user_id, place_id, saved_at=None):
+def add_saved(user_id, place_id, saved_at=None, category=None):
     saved_at = saved_at or datetime.now().isoformat()
     with get_conn() as c:
         c.execute(
-            "INSERT INTO saved_places (user_id, place_id, saved_at) VALUES (?, ?, ?)",
-            (user_id, place_id, saved_at)
+            "INSERT INTO saved_places (user_id, place_id, saved_at, category) VALUES (?, ?, ?, ?)",
+            (user_id, place_id, saved_at, category)
         )
+    invalidate_affinity_cache(user_id)
 
 
 def remove_saved(user_id, place_id):
     with get_conn() as c:
         c.execute("DELETE FROM saved_places WHERE user_id = ? AND place_id = ?", (user_id, place_id))
+    invalidate_affinity_cache(user_id)
 
 
 def saved_contains(user_id, place_id):
@@ -351,21 +365,28 @@ def saved_contains(user_id, place_id):
 def get_recent_recommendations_list(user_id):
     with get_conn() as c:
         rows = c.execute(
-            "SELECT place_id, rec_id, recommended_at, week FROM recent_recommendations WHERE user_id = ? ORDER BY recommended_at DESC",
+            "SELECT place_id, rec_id, recommended_at, week, category FROM recent_recommendations WHERE user_id = ? ORDER BY recommended_at DESC",
             (user_id,)
         ).fetchall()
     return [
-        {"place_id": r["place_id"], "rec_id": r["rec_id"], "recommended_at": r["recommended_at"], "week": r["week"]}
+        {"place_id": r["place_id"], "rec_id": r["rec_id"], "recommended_at": r["recommended_at"], "week": r["week"], "category": r["category"]}
         for r in rows
     ]
 
 
-def add_recent_recommendation(user_id, place_id, rec_id, week):
+def add_recent_recommendation(user_id, place_id, rec_id, week, category=None):
     now = datetime.now().isoformat()
     with get_conn() as c:
+        # Idempotent impressions: skip if this place was already recorded for this week
+        existing = c.execute(
+            "SELECT 1 FROM recent_recommendations WHERE user_id = ? AND place_id = ? AND week = ?",
+            (user_id, place_id, week)
+        ).fetchone()
+        if existing:
+            return
         c.execute(
-            "INSERT INTO recent_recommendations (user_id, place_id, rec_id, recommended_at, week) VALUES (?, ?, ?, ?, ?)",
-            (user_id, place_id, rec_id, now, week)
+            "INSERT INTO recent_recommendations (user_id, place_id, rec_id, recommended_at, week, category) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, place_id, rec_id, now, week, category)
         )
 
 
@@ -605,6 +626,7 @@ def add_click(user_id, place_id, rec_id=None, category=None):
             "INSERT INTO click_tracking (user_id, place_id, rec_id, category, clicked_at) VALUES (?, ?, ?, ?, ?)",
             (user_id, place_id, rec_id, category, now)
         )
+    invalidate_affinity_cache(user_id)
 
 
 def get_click_counts_by_category(user_id):
@@ -615,6 +637,16 @@ def get_click_counts_by_category(user_id):
             (user_id,)
         ).fetchall()
     return {r["category"]: r["cnt"] for r in rows}
+
+
+def get_click_list(user_id):
+    """Get individual clicks with category and timestamp, most recent first."""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT category, clicked_at FROM click_tracking WHERE user_id = ? ORDER BY clicked_at DESC",
+            (user_id,)
+        ).fetchall()
+    return [{"category": r["category"], "clicked_at": r["clicked_at"]} for r in rows]
 
 
 # ---------- User affinity cache ----------

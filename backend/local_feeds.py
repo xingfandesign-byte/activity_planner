@@ -1361,6 +1361,21 @@ def _infer_category(title, description="", existing_category=""):
     return existing_category or "events"
 
 
+def _infer_kid_friendly(title, description=""):
+    """Infer kid-friendliness from title/description. Returns True, False, or None (unknown)."""
+    text = f"{title} {description}".lower()
+    kid_keywords = ["family", "kid", "kids", "children", "child", "toddler", "baby", "parent",
+                    "playground", "storytime", "story time", "puppet", "zoo", "aquarium",
+                    "all ages", "family-friendly"]
+    adult_keywords = ["21+", "18+", "adults only", "cocktail crawl", "bar crawl",
+                      "singles", "speed date"]
+    if any(kw in text for kw in kid_keywords):
+        return True
+    if any(kw in text for kw in adult_keywords):
+        return False
+    return None
+
+
 def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_str, geocode_fn=None, user_state=None):
     """
     Turn a raw feed item into the same shape as Google Places recommendations
@@ -1530,6 +1545,10 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
     # Get event date from item (may be pub_date, start_at, date, etc.)
     event_date = item.get("pub_date") or item.get("start_at") or item.get("date") or item.get("event_date") or ""
     
+    # Preserve the source's price flag when present; None means unknown (scored neutrally)
+    price_flag = item.get("price_flag")
+    price_flag = price_flag.strip() if isinstance(price_flag, str) and price_flag.strip() else None
+    
     return {
         "rec_id": f"lf_{week_str}_{index}",
         "type": "event",
@@ -1542,8 +1561,8 @@ def normalize_feed_item_to_recommendation(item, index, user_lat, user_lng, week_
         "travel_time_display": travel_time_display,
         "distance_is_estimated": distance_is_estimated,
         "distance_is_na": distance_is_na,
-        "price_flag": (item.get("price_flag") or "$").strip() if isinstance(item.get("price_flag"), str) else "$",
-        "kid_friendly": False,
+        "price_flag": price_flag,
+        "kid_friendly": item.get("kid_friendly") if item.get("kid_friendly") is not None else _infer_kid_friendly(title, description),
         "indoor_outdoor": "indoor",
         "description": description,
         "explanation": explanation,
