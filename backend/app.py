@@ -707,11 +707,23 @@ def image_search():
 
 # ========== USER AFFINITY / PERSONALIZATION ==========
 
+def _interaction_decay(timestamp_str, half_life_days=90.0):
+    """Exponential time decay for interaction weights. Returns 1.0 for fresh
+    interactions and for timestamps that can't be parsed."""
+    try:
+        ts = datetime.fromisoformat(timestamp_str)
+        age_days = max(0.0, (datetime.now() - ts).total_seconds() / 86400.0)
+        return 0.5 ** (age_days / half_life_days)
+    except (ValueError, TypeError):
+        return 1.0
+
+
 def get_user_affinity_scores(user_id):
     """
     Compute category affinity scores from user behavior.
     Weights: saves (strong+), visits (moderate+), thumbs_up (strong+), thumbs_down (negative), clicks (weak+).
-    Returns dict like {"parks": 0.8, "food": 0.3, "museums": -0.2} or {} for new users.
+    All weights decay with a 90-day half-life; categories are canonicalized.
+    Returns dict like {"nature": 0.8, "food_drink": 0.3, "arts_culture": -0.2} or {} for new users.
     Cached per user, recomputed hourly or on new interaction.
     """
     # Check cache first
@@ -722,35 +734,43 @@ def get_user_affinity_scores(user_id):
     affinity = {}
 
     def _add(category, weight):
+        category = _canonical_category(category)
         if category:
             affinity[category] = affinity.get(category, 0.0) + weight
 
-    # Saves: strong positive (+0.3 each)
+    # Saves: strong positive (+0.3 each, time-decayed)
     saved = db.get_saved_list(user_id)
     for s in saved:
-        # Need category - look up from mock or recent recs
-        cat = _get_category_for_place(user_id, s['place_id'])
-        _add(cat, 0.3)
+        cat = s.get('category') or _get_category_for_place(user_id, s['place_id'])
+        _add(cat, 0.3 * _interaction_decay(s.get('saved_at')))
 
-    # Visits: moderate positive (+0.2 each)
+    # Visits: moderate positive (+0.2 each, time-decayed)
     visited = db.get_visited_list(user_id)
     for v in visited:
-        cat = _get_category_for_place(user_id, v['place_id'])
-        _add(cat, 0.2)
+        cat = v.get('category') or _get_category_for_place(user_id, v['place_id'])
+        _add(cat, 0.2 * _interaction_decay(v.get('visited_at')))
 
-    # Feedback: thumbs_up (+0.4), thumbs_down (-0.5)
+    # Feedback: thumbs_up (+0.4), thumbs_down (-0.5), time-decayed
     feedback = db.get_all_feedback(user_id)
     for f in feedback:
         cat = f.get('category') or _get_category_for_place(user_id, f['place_id'])
         if f['feedback_type'] == 'thumbs_up':
-            _add(cat, 0.4)
+            _add(cat, 0.4 * _interaction_decay(f.get('created_at')))
         elif f['feedback_type'] == 'thumbs_down':
-            _add(cat, -0.5)
+            _add(cat, -0.5 * _interaction_decay(f.get('created_at')))
 
-    # Clicks: weak positive (+0.1 each)
-    click_counts = db.get_click_counts_by_category(user_id)
-    for cat, cnt in click_counts.items():
-        _add(cat, 0.1 * min(cnt, 10))  # Cap at 10 clicks
+    # Clicks: weak positive (+0.1 each, time-decayed), at most 10 clicks per category
+    clicks = db.get_click_list(user_id)
+    clicks_per_category = {}
+    for c in clicks:
+        cat = c.get('category')
+        if not cat:
+            continue
+        canon = _canonical_category(cat)
+        if clicks_per_category.get(canon, 0) >= 10:
+            continue
+        clicks_per_category[canon] = clicks_per_category.get(canon, 0) + 1
+        _add(cat, 0.1 * _interaction_decay(c['clicked_at']))
 
     # Normalize to [-1, 1] range
     if affinity:
@@ -866,6 +886,18 @@ WARM_CACHE_FRESH_SECONDS = 180   # 3 min: fully fresh, no refresh needed
 WARM_CACHE_STALE_SECONDS = 600   # 10 min: stale but serveable, trigger background refresh
 
 
+def _record_served_impressions(user_id, items):
+    """Record serve-time impressions (idempotent per user/place/week). Never breaks serving."""
+    try:
+        week = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
+        for item in items or []:
+            if not item.get('place_id') or not item.get('rec_id'):
+                continue
+            db.add_recent_recommendation(user_id, item.get('place_id'), item.get('rec_id'), week, category=item.get('category'))
+    except Exception as e:
+        print(f"[RECOMMENDATIONS] Failed to record impressions: {e}")
+
+
 def get_recommendations(user_id, prefs):
     """
     Main recommendation engine with stale-while-revalidate pattern:
@@ -899,6 +931,7 @@ def get_recommendations(user_id, prefs):
                 )
                 t.start()
                 print(f"[WARM_CACHE] Triggered background refresh (stale)")
+            _record_served_impressions(user_id, cached['items'])
             return cached['items'], cached['sources']
     
     # No warm cache — fetch live (blocking)
@@ -912,6 +945,7 @@ def get_recommendations(user_id, prefs):
             'timestamp': datetime.now()
         }
     
+    _record_served_impressions(user_id, items)
     return items, sources
 
 
@@ -1094,9 +1128,11 @@ def _item_search_text(item):
         str(item.get('title') or item.get('name') or ''),
         str(item.get('description') or item.get('explanation') or ''),
         str(item.get('category') or ''),
-        str(item.get('address') or ''),
-        str(item.get('source') or item.get('feed_source') or ''),
     ]).lower()
+
+
+def _keyword_in_text(keyword, text):
+    return re.search(r'\b' + re.escape(keyword.lower()) + r'\b', text) is not None
 
 
 def _recommendation_time_bucket(item):
@@ -1121,6 +1157,21 @@ def _recommendation_source(item):
 
 def _recommendation_category(item):
     return item.get('category') or 'events'
+
+
+# Google/mock items use plural categories (parks, museums, food, attractions);
+# feed _infer_category uses nature/arts_culture/food_drink/entertainment.
+_CATEGORY_CANONICAL_MAP = {
+    'parks': 'nature', 'museums': 'arts_culture', 'food': 'food_drink',
+    'food_drinks': 'food_drink', 'attractions': 'entertainment', 'shopping': 'shopping',
+}
+
+
+def _canonical_category(category):
+    if not category:
+        return category
+    c = str(category).strip().lower()
+    return _CATEGORY_CANONICAL_MAP.get(c, c)
 
 
 def _has_unknown_distance(item):
@@ -1156,7 +1207,7 @@ def _price_level(price_flag):
         return 2
     if price == '$$$':
         return 3
-    return 1
+    return None
 
 
 def _interest_keywords(interests):
@@ -1272,7 +1323,7 @@ def _filter_recommendation_candidates(items, prefs, user_id):
     return filtered_items, stats
 
 
-def _score_recommendation_item(item, prefs, user_affinity, now=None):
+def _score_recommendation_item(item, prefs, user_affinity, now=None, recent_map=None):
     """Return total score and score parts for one candidate."""
     now = now or datetime.now()
     parts = {}
@@ -1325,8 +1376,8 @@ def _score_recommendation_item(item, prefs, user_affinity, now=None):
         parts["freshness"] = -3
 
     interest_keywords = _interest_keywords(prefs.get('interests', []))
-    match_count = sum(1 for kw in interest_keywords if kw and kw in text)
-    if category in prefs.get('categories', []):
+    match_count = sum(1 for kw in interest_keywords if kw and _keyword_in_text(kw, text))
+    if _canonical_category(category) in {_canonical_category(c) for c in prefs.get('categories', [])}:
         match_count += 1
     if match_count >= 3:
         parts["preference_match"] = 24
@@ -1337,16 +1388,22 @@ def _score_recommendation_item(item, prefs, user_affinity, now=None):
 
     group_type = (prefs.get('group_type') or '').lower()
     if group_type == 'family':
-        parts["group_fit"] = 14 if item.get('kid_friendly') else -10
-    elif group_type == 'couple' and any(kw in text for kw in ["date", "wine", "dinner", "romantic", "couple"]):
+        kid_friendly = item.get('kid_friendly')
+        if kid_friendly is True:
+            parts["group_fit"] = 14
+        elif kid_friendly is False:
+            parts["group_fit"] = -10
+    elif group_type == 'couple' and any(_keyword_in_text(kw, text) for kw in ["date", "wine", "dinner", "romantic", "couple"]):
         parts["group_fit"] = 7
-    elif group_type == 'friends' and any(kw in text for kw in ["social", "party", "game", "music", "festival"]):
+    elif group_type == 'friends' and any(_keyword_in_text(kw, text) for kw in ["social", "party", "game", "music", "festival"]):
         parts["group_fit"] = 7
 
     budget = _normalize_budget_value(prefs.get('budget'))
     price_level = _price_level(item.get('price_flag'))
     if price_level == 0:
         parts["budget"] = 8
+    elif price_level is None:
+        pass  # Unknown price: no budget part either way
     elif budget == 'free':
         parts["budget"] = -24
     elif budget == 'low' and price_level >= 2:
@@ -1354,9 +1411,13 @@ def _score_recommendation_item(item, prefs, user_affinity, now=None):
     elif budget in ('moderate', 'flexible') and price_level <= 2:
         parts["budget"] = 4
 
-    rating = item.get('rating') or 0
+    rating = item.get('rating')
     if isinstance(rating, (int, float)) and rating > 0:
         parts["rating"] = min(18, round(rating * 3, 1))
+    else:
+        # Neutral midpoint of the 0-18 component so unrated feed items
+        # aren't structurally below Google items.
+        parts["rating"] = 9
 
     quality = 0
     if item.get('photo_url'):
@@ -1372,8 +1433,29 @@ def _score_recommendation_item(item, prefs, user_affinity, now=None):
     parts["quality"] = quality
 
     if user_affinity:
-        affinity_val = user_affinity.get(category, 0.0)
+        # Canonicalize affinity keys too, so legacy categories (e.g. "parks"
+        # from Google/mock items) match feed categories (e.g. "nature").
+        canonical_affinity = {}
+        for aff_cat, aff_val in user_affinity.items():
+            canon = _canonical_category(aff_cat)
+            canonical_affinity[canon] = canonical_affinity.get(canon, 0.0) + aff_val
+        affinity_val = canonical_affinity.get(_canonical_category(category), 0.0)
         parts["affinity"] = round(affinity_val * 18, 1)
+
+    # Soft novelty penalty for recently served places (replaces the hard 4-week dedup)
+    if recent_map:
+        recommended_at = recent_map.get(item.get('place_id'))
+        if recommended_at is not None:
+            try:
+                age_days = (now.date() - recommended_at.date()).days
+                if age_days <= 7:
+                    parts["novelty"] = -20
+                elif age_days <= 14:
+                    parts["novelty"] = -10
+                elif age_days <= 28:
+                    parts["novelty"] = -5
+            except (AttributeError, TypeError):
+                pass
 
     return round(sum(parts.values()), 1), parts
 
@@ -1483,9 +1565,22 @@ def _select_diverse_recommendations(scored_items, max_items=15):
 def _rank_recommendation_candidates(items, prefs, user_id, max_items=15):
     user_affinity = get_user_affinity_scores(user_id)
     now = datetime.now()
+    # Map place_id -> most recent time it was served (for soft novelty penalty)
+    try:
+        recent_map = {}
+        for rec in db.get_recent_recommendations_list(user_id):  # ordered most-recent first
+            place_id = rec.get('place_id')
+            if not place_id or place_id in recent_map:
+                continue
+            try:
+                recent_map[place_id] = datetime.fromisoformat(rec['recommended_at'])
+            except (ValueError, TypeError):
+                continue
+    except Exception:
+        recent_map = {}
     scored_items = []
     for item in items:
-        score, score_parts = _score_recommendation_item(item, prefs, user_affinity, now=now)
+        score, score_parts = _score_recommendation_item(item, prefs, user_affinity, now=now, recent_map=recent_map)
         scored_items.append({
             "item": item,
             "score": score,
@@ -1771,7 +1866,7 @@ def get_enriched_mock_data(prefs, user_id, user_lat, user_lng):
     
     # Track as recently recommended
     for item in mock_items:
-        db.add_recent_recommendation(user_id, item['place_id'], item['rec_id'], week)
+        db.add_recent_recommendation(user_id, item['place_id'], item['rec_id'], week, category=item.get('category'))
     
     return mock_items
 
@@ -2241,10 +2336,10 @@ def convert_google_place_to_item(place, user_location, index):
     distance = calculate_distance(user_lat, user_lng, place_lat, place_lng)
     travel_time = estimate_travel_time_minutes(distance)
     
-    # Get price level
-    price_level = place.get('price_level', 1)
+    # Get price level (None when Google doesn't provide one = unknown)
+    price_level = place.get('price_level')
     price_flags = {0: 'free', 1: '$', 2: '$$', 3: '$$$', 4: '$$$$'}
-    price_flag = price_flags.get(price_level, '$')
+    price_flag = price_flags.get(price_level)
     
     # Determine category from types
     types = place.get('types', [])
@@ -2290,7 +2385,7 @@ def convert_google_place_to_item(place, user_location, index):
         "explanation": f"Highly rated {category} spot nearby",
         "source_url": f"https://maps.google.com/?q={place_lat},{place_lng}",
         "address": place.get('vicinity', place.get('formatted_address', '')),
-        "rating": place.get('rating', 4.0),
+        "rating": place.get('rating'),
         "total_ratings": place.get('user_ratings_total', 0),
         "photo_url": photo_url,
         "google_place": True,
@@ -2467,7 +2562,7 @@ def submit_feedback():
             # Try to find from current digest
             for rec in db.get_recent_recommendations_list(user_id):
                 if rec['rec_id'] == rec_id:
-                    category = _get_category_for_place(user_id, rec['place_id'])
+                    category = rec.get('category') or _get_category_for_place(user_id, rec['place_id'])
                     break
         db.add_feedback(user_id, place_id, action, rec_id=rec_id, category=category)
         print(f"[FEEDBACK] User {user_id} gave {action} to {place_id} (category: {category})")
@@ -2482,7 +2577,16 @@ def submit_feedback():
     # Handle "already_been" action - add to visited list
     if action == "already_been" and place_id:
         if not db.visited_contains(user_id, place_id):
-            db.add_visited(user_id, place_id, signal_type="manual", confidence=1.0)
+            # Category: request body -> stored impression -> mock/warm cache
+            category = data.get('category')
+            if not category:
+                for rec in db.get_recent_recommendations_list(user_id):
+                    if rec['rec_id'] == rec_id:
+                        category = rec.get('category')
+                        break
+            if not category:
+                category = _get_category_for_place(user_id, place_id)
+            db.add_visited(user_id, place_id, signal_type="manual", confidence=1.0, category=category)
             print(f"[FEEDBACK] User {user_id} marked {place_id} as been")
     
     # Handle "unbeen" action - remove from visited list
@@ -2493,7 +2597,16 @@ def submit_feedback():
     # Handle "favorite" action - add to saved list
     elif action == "favorite" and place_id:
         if not db.saved_contains(user_id, place_id):
-            db.add_saved(user_id, place_id)
+            # Category: request body -> stored impression -> mock/warm cache
+            category = data.get('category')
+            if not category:
+                for rec in db.get_recent_recommendations_list(user_id):
+                    if rec['rec_id'] == rec_id:
+                        category = rec.get('category')
+                        break
+            if not category:
+                category = _get_category_for_place(user_id, place_id)
+            db.add_saved(user_id, place_id, category=category)
             print(f"[FEEDBACK] User {user_id} saved {place_id}")
     
     # Handle "unsave" action - remove from saved list
@@ -2516,7 +2629,7 @@ def track_click():
     if not place_id:
         return jsonify({"error": "Missing place_id"}), 400
     
-    category = _get_category_for_place(user_id, place_id)
+    category = data.get('category') or _get_category_for_place(user_id, place_id)
     
     # Store click in database using the existing db function
     db.add_click(user_id, place_id, rec_id=rec_id, category=category)
@@ -4333,8 +4446,9 @@ def _warm_cache_on_startup():
     print("[WARM_CACHE] Background cache warming started")
 
 
-# Warm cache on startup (non-blocking)
-_warm_cache_on_startup()
+# Warm cache on startup (non-blocking); tests can skip this via env var
+if os.environ.get('DISABLE_WARM_CACHE_ON_IMPORT') != '1':
+    _warm_cache_on_startup()
 
 
 if __name__ == '__main__':
