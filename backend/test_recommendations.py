@@ -179,3 +179,39 @@ def test_affinity_time_decay(fresh_db):
     assert scores['nature'] > scores['food_drink']
     # Control: same signal and same recency scores identically
     assert scores['nature'] == scores['shopping']
+
+
+# ---------- 9. Email digest unification ----------
+
+def test_digest_items_use_main_engine(monkeypatch):
+    """get_weekend_digest_items returns the top slice of the main engine's ranked items."""
+    calls = {}
+    fake_items = [{"title": f"Item {i}", "place_id": f"p{i}", "rec_id": f"r{i}"} for i in range(8)]
+
+    def fake_get_recommendations(user_id, prefs):
+        calls['args'] = (user_id, prefs)
+        return fake_items, ['fake']
+
+    monkeypatch.setattr(app, 'get_recommendations', fake_get_recommendations)
+    prefs = {'home_location': {'lat': 34.05, 'lng': -118.24}}
+    items = app.get_weekend_digest_items('u1', prefs, max_items=5)
+    assert calls['args'] == ('u1', prefs)
+    assert items == fake_items[:5]
+
+
+def test_digest_location_prefers_home_location():
+    """home_location (the key PUT /v1/preferences saves) wins over the legacy 'location' key."""
+    prefs = {
+        'home_location': {'lat': 34.05, 'lng': -118.24},
+        'location': {'lat': 37.33, 'lng': -121.88},
+    }
+    assert app._digest_user_lat_lng(prefs) == (34.05, -118.24)
+    # Legacy key still honored when home_location is absent
+    assert app._digest_user_lat_lng({'location': {'lat': 37.33, 'lng': -121.88}}) == (37.33, -121.88)
+    # No location -> main pipeline's default (SF), no geocoding/network involved
+    assert app._digest_user_lat_lng({}) == (37.7749, -122.4194)
+
+
+def test_why_picked_unknown_price_not_labeled_free():
+    assert 'Free' not in app._why_picked({"title": "Mystery event", "category": "events", "price_flag": None})
+    assert 'Free' in app._why_picked({"title": "Park day", "category": "parks", "price_flag": "free"})

@@ -2951,7 +2951,7 @@ def _why_picked(item, user_lat=None, user_lng=None):
     if dist is not None:
         parts.append(f"Close to you ({dist}mi)")
     price = (item.get('price_flag') or '').strip().lower()
-    if price in ('free', '$0', ''):
+    if price in ('free', '$0'):
         parts.append('Free')
     cat = (item.get('category') or '').lower()
     if 'family' in cat or 'kids' in cat or item.get('kid_friendly'):
@@ -2976,101 +2976,19 @@ def _is_free(item):
     return price in ('free', '$0', '')
 
 
-def get_weekend_digest_items(user_lat, user_lng, preferences, max_items=5):
-    """Smart selection of digest items with diversity constraints."""
-    from local_feeds import get_local_feed_recommendations
+def _digest_user_lat_lng(preferences):
+    """Resolve location for digests: home_location (the key the app saves via
+    PUT /v1/preferences), falling back to the legacy 'location' key. Uses the
+    same resolver/defaults as the main pipeline so emails match in-app results."""
+    location = preferences.get('home_location') or preferences.get('location') or {}
+    return resolve_user_location(location)
 
-    # Fetch more than needed for selection
-    all_items = get_local_feed_recommendations(
-        profile=preferences,
-        user_lat=user_lat,
-        user_lng=user_lng,
-        geocode_fn=geocode_to_lat_lng,
-        max_items=10
-    )
-    if not all_items:
-        return []
 
-    sat, sun, _ = _weekend_date_range()
-    today = datetime.now().date()
-    max_future = today + timedelta(days=7)
-
-    # Filter: weekend events, evergreen, or within 7 days
-    filtered = []
-    for item in all_items:
-        event_date_str = item.get('event_date') or ''
-        if event_date_str:
-            try:
-                ed = datetime.fromisoformat(event_date_str.replace('Z', '+00:00')).date()
-                if ed < today:
-                    continue  # already passed
-                if ed > max_future:
-                    continue  # too far away
-            except Exception:
-                pass
-        if _is_evergreen(item):
-            filtered.append(item)
-        elif event_date_str:
-            filtered.append(item)
-        else:
-            filtered.append(item)  # keep general recommendations too
-
-    if not filtered:
-        filtered = all_items[:max_items]
-
-    # Diversity selection
-    selected = []
-    source_count = {}
-    has_dated = False
-    has_free = False
-    categories_used = set()
-
-    def _add(item):
-        nonlocal has_dated, has_free
-        selected.append(item)
-        src = item.get('feed_source') or item.get('source', 'unknown')
-        source_count[src] = source_count.get(src, 0) + 1
-        if item.get('event_date'):
-            has_dated = True
-        if _is_free(item):
-            has_free = True
-        categories_used.add((item.get('category') or '').lower())
-
-    def _can_add(item):
-        src = item.get('feed_source') or item.get('source', 'unknown')
-        if source_count.get(src, 0) >= 2:
-            return False
-        return True
-
-    # First pass: ensure at least 1 dated event and 1 free item
-    for item in filtered:
-        if len(selected) >= max_items:
-            break
-        if not has_dated and item.get('event_date') and _can_add(item):
-            _add(item)
-            continue
-        if not has_free and _is_free(item) and _can_add(item):
-            _add(item)
-            continue
-
-    # Second pass: fill remaining with diversity
-    for item in filtered:
-        if len(selected) >= max_items:
-            break
-        if item in selected:
-            continue
-        if not _can_add(item):
-            continue
-        _add(item)
-
-    # Fallback: if still under, add without constraints
-    for item in filtered:
-        if len(selected) >= max_items:
-            break
-        if item not in selected:
-            _add(item)
-
-    return selected
+def get_weekend_digest_items(user_id, preferences, max_items=5):
+    """Digest items from the main recommendation engine: same scoring, affinity,
+    visited dedup, novelty rotation, and diversity as in-app recommendations."""
+    items, _sources = get_recommendations(user_id, preferences)
+    return items[:max_items]
 
 
 def send_password_reset_email(to_email, reset_link):
@@ -3157,25 +3075,25 @@ If you didn't create an account, you can ignore this email.
         return False
 
 
-def send_friday_digest_email(to_email, user_name, recommendations, frontend_url):
+def send_friday_digest_email(to_email, user_name, recommendations, frontend_url, user_lat=None, user_lng=None):
     """Send Friday digest email with personalized recommendations. Returns True on success."""
     if not SMTP_HOST or not SMTP_USER:
         print("[EMAIL] SMTP not configured (set SMTP_HOST, SMTP_USER, SMTP_PASSWORD)")
         return False
-    
+
     if not recommendations:
         print(f"[EMAIL] No recommendations for {to_email}, skipping digest")
         return False
-    
+
     greeting = f"Hi {user_name}," if user_name else "Hi,"
     _, _, weekend_label = _weekend_date_range()
     subject = f"🎉 Your Weekend Picks: {weekend_label}"
-    
-    # Try to get weather
+
+    # Try to get weather (prefer the user's resolved location over the item's)
     first_rec = recommendations[0] if recommendations else {}
     weather = _get_weather_summary(
-        first_rec.get('lat', 37.5485),
-        first_rec.get('lng', -121.9886)
+        user_lat if user_lat is not None else first_rec.get('lat', 37.5485),
+        user_lng if user_lng is not None else first_rec.get('lng', -121.9886)
     )
     
     base_url = frontend_url or 'https://activityplanner.local'
@@ -3343,20 +3261,13 @@ def send_all_friday_digests():
             if not email or not preferences:
                 continue
             
-            # Get personalized recommendations - use default location if not set
-            user_location = preferences.get('location') or {}
-            user_lat = user_location.get('lat') or 37.5485  # Default: Fremont, CA
-            user_lng = user_location.get('lng') or -121.9886
-            
-            recommendations = get_weekend_digest_items(
-                user_lat=user_lat,
-                user_lng=user_lng,
-                preferences=preferences,
-                max_items=5
-            )
-            
+            # Get personalized recommendations via the main engine
+            user_lat, user_lng = _digest_user_lat_lng(preferences)
+
+            recommendations = get_weekend_digest_items(user_id, preferences, max_items=5)
+
             if recommendations:
-                if send_friday_digest_email(email, name, recommendations, FRONTEND_URL):
+                if send_friday_digest_email(email, name, recommendations, FRONTEND_URL, user_lat=user_lat, user_lng=user_lng):
                     sent_count += 1
                     
         except Exception as e:
@@ -3467,14 +3378,8 @@ def digest_preview():
     fmt = request.args.get('format', 'json')
     prefs = db.get_preferences(user_id) or {}
 
-    user_location = prefs.get('location') or prefs.get('home_location') or {}
-    if isinstance(user_location, dict):
-        user_lat = user_location.get('lat') or 37.5485
-        user_lng = user_location.get('lng') or -121.9886
-    else:
-        user_lat, user_lng = 37.5485, -121.9886
-
-    items = get_weekend_digest_items(user_lat, user_lng, prefs, max_items=5)
+    user_lat, user_lng = _digest_user_lat_lng(prefs)
+    items = get_weekend_digest_items(user_id, prefs, max_items=5)
 
     if fmt == 'telegram':
         text = format_digest_telegram(items, user_lat, user_lng)
@@ -3511,14 +3416,8 @@ def digest_send():
     channel = data.get('channel', 'email')  # email | telegram | both
     prefs = db.get_preferences(user_id) or {}
 
-    user_location = prefs.get('location') or prefs.get('home_location') or {}
-    if isinstance(user_location, dict):
-        user_lat = user_location.get('lat') or 37.5485
-        user_lng = user_location.get('lng') or -121.9886
-    else:
-        user_lat, user_lng = 37.5485, -121.9886
-
-    items = get_weekend_digest_items(user_lat, user_lng, prefs, max_items=5)
+    user_lat, user_lng = _digest_user_lat_lng(prefs)
+    items = get_weekend_digest_items(user_id, prefs, max_items=5)
     if not items:
         return jsonify({'error': 'No recommendations available'}), 404
 
@@ -3529,7 +3428,7 @@ def digest_send():
 
     if channel in ('email', 'both'):
         if user_email:
-            results['email'] = send_friday_digest_email(user_email, user_name, items, FRONTEND_URL)
+            results['email'] = send_friday_digest_email(user_email, user_name, items, FRONTEND_URL, user_lat=user_lat, user_lng=user_lng)
         else:
             results['email'] = False
             results['email_error'] = 'No email on file'
@@ -4244,29 +4143,22 @@ def send_test_digest():
     if not prefs:
         return jsonify({"error": "User has no preferences set"}), 400
     
-    # Get recommendations - use default Bay Area location if user has no location set
-    from local_feeds import get_local_feed_recommendations
-    user_location = prefs.get('location') or {}
-    user_lat = user_location.get('lat') or 37.5485  # Default: Fremont, CA
-    user_lng = user_location.get('lng') or -121.9886
-    
-    recommendations = get_local_feed_recommendations(
-        profile=prefs,
-        user_lat=user_lat,
-        user_lng=user_lng,
-        geocode_fn=geocode_to_lat_lng,
-        max_items=5
-    )
+    # Get recommendations via the main engine
+    user_lat, user_lng = _digest_user_lat_lng(prefs)
+
+    recommendations = get_weekend_digest_items(user['user_id'], prefs, max_items=5)
     
     if not recommendations:
         return jsonify({"error": "No recommendations available"}), 400
     
     # Send digest
     success = send_friday_digest_email(
-        email, 
-        user.get('name', ''), 
-        recommendations, 
-        FRONTEND_URL
+        email,
+        user.get('name', ''),
+        recommendations,
+        FRONTEND_URL,
+        user_lat=user_lat,
+        user_lng=user_lng
     )
     
     if success:
