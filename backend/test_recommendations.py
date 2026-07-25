@@ -215,3 +215,110 @@ def test_digest_location_prefers_home_location():
 def test_why_picked_unknown_price_not_labeled_free():
     assert 'Free' not in app._why_picked({"title": "Mystery event", "category": "events", "price_flag": None})
     assert 'Free' in app._why_picked({"title": "Park day", "category": "parks", "price_flag": "free"})
+
+
+# ---------- 10. Backend hardening fixes ----------
+
+def test_filter_loads_visited_once_per_batch(monkeypatch, fresh_db):
+    """Visited places are loaded with a single query per filter run, not per candidate."""
+    fresh_db.add_visited('u1', 'p_visited', category='parks')
+    calls = []
+    real_get = db.get_visited_list
+
+    def spy(user_id):
+        calls.append(user_id)
+        return real_get(user_id)
+
+    monkeypatch.setattr(app.db, 'get_visited_list', spy)
+    items = [
+        {"title": "Been There", "place_id": "p_visited", "type": "place", "address": "1 Main St"},
+        {"title": "New Spot A", "place_id": "p_a", "type": "place", "address": "2 Main St"},
+        {"title": "New Spot B", "place_id": "p_b", "type": "place", "address": "3 Main St"},
+    ]
+    filtered, stats = app._filter_recommendation_candidates(items, {}, 'u1')
+    assert [i['place_id'] for i in filtered] == ['p_a', 'p_b']
+    assert stats['visited'] == 1
+    assert len(calls) == 1
+
+
+def _img_items():
+    return [
+        {"title": "Alpha", "photo_url": "http://img/Alpha"},  # short-circuits, no fetch
+        {"title": "Bravo"},
+        {"title": "Charlie"},
+        {"title": "Delta"},
+    ]
+
+
+def _patch_image_search(monkeypatch, delays):
+    import time as _time
+    app.image_search_cache.clear()
+    monkeypatch.setattr(app, 'GOOGLE_PLACES_API_KEY', None)
+
+    def fake_search(query, event_url=None, timeout=3):
+        _time.sleep(delays.get(query, 0))
+        return (f"http://img/{query}", "test")
+
+    monkeypatch.setattr(app, 'search_free_image', fake_search)
+
+
+def test_image_enrichment_preserves_rank_order(monkeypatch, fresh_db):
+    """Completed results are mapped back to their original item, not appended in completion order."""
+    _patch_image_search(monkeypatch, {"Bravo": 0.3, "Charlie": 0.1, "Delta": 0.2})
+    out = app.enrich_items_with_images(_img_items(), max_time_seconds=10)
+    assert [i['title'] for i in out] == ["Alpha", "Bravo", "Charlie", "Delta"]
+    for item in out:
+        assert item['photo_url'] == f"http://img/{item['title']}"
+
+
+def test_image_enrichment_timeout_no_dupes_or_drops(monkeypatch, fresh_db):
+    """On timeout, unfinished items pass through unchanged — no duplicates, no drops."""
+    _patch_image_search(monkeypatch, {"Bravo": 0.2, "Charlie": 1.0, "Delta": 1.0})
+    out = app.enrich_items_with_images(_img_items(), max_time_seconds=0.5)
+    assert [i['title'] for i in out] == ["Alpha", "Bravo", "Charlie", "Delta"]
+    assert out[0]['photo_url'] == "http://img/Alpha"
+    assert out[1]['photo_url'] == "http://img/Bravo"
+    assert 'photo_url' not in out[2]
+    assert 'photo_url' not in out[3]
+
+
+def test_warm_cache_spawns_single_background_refresh(monkeypatch, fresh_db):
+    """Concurrent requests against a stale cache claim the refresh slot atomically."""
+    import threading as _th
+    import time as _time
+
+    calls = []
+
+    def fake_live(user_id, prefs, cache_key):
+        calls.append(cache_key)
+        _time.sleep(0.1)
+        return [{"title": "Fresh", "place_id": "pf", "rec_id": "rf"}], ["fake"]
+
+    monkeypatch.setattr(app, '_fetch_recommendations_live', fake_live)
+    prefs = {'home_location': {'lat': 1.0, 'lng': 2.0}}
+    key = app._get_warm_cache_key('u1', prefs)
+    with app._warm_cache_lock:
+        app._warm_cache.clear()
+        app._background_refresh_in_progress.clear()
+        app._warm_cache[key] = {
+            'items': [{"title": "Old", "place_id": "po", "rec_id": "ro"}],
+            'sources': ['fake'],
+            'timestamp': datetime.now() - timedelta(seconds=300),  # stale: 180 < age < 600
+        }
+    try:
+        threads = [_th.Thread(target=app.get_recommendations, args=('u1', prefs)) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # Wait for the background refresh to finish
+        for _ in range(100):
+            with app._warm_cache_lock:
+                if not app._background_refresh_in_progress:
+                    break
+            _time.sleep(0.02)
+        assert len(calls) == 1
+    finally:
+        with app._warm_cache_lock:
+            app._warm_cache.clear()
+            app._background_refresh_in_progress.clear()
