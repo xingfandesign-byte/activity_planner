@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import secrets
 import smtplib
+import threading
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from functools import wraps
@@ -67,7 +68,7 @@ geocode_cache = {}
 image_search_cache = {}
 # In-memory warm cache for recommendations (key -> {items, sources, timestamp})
 _warm_cache = {}
-_warm_cache_lock = None  # Lazy-initialized threading lock
+_warm_cache_lock = threading.Lock()  # Guards _warm_cache and _background_refresh_in_progress
 _background_refresh_in_progress = set()  # Track in-flight background refreshes
 
 # Circuit breaker pattern for external APIs
@@ -863,22 +864,26 @@ def _refresh_recommendations_background(user_id, prefs, cache_key):
     try:
         items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
         if items:
-            _warm_cache[cache_key] = {
-                'items': items,
-                'sources': sources,
-                'timestamp': datetime.now()
-            }
+            with _warm_cache_lock:
+                _warm_cache[cache_key] = {
+                    'items': items,
+                    'sources': sources,
+                    'timestamp': datetime.now()
+                }
             print(f"[WARM_CACHE] Background refresh done: {len(items)} items for key {cache_key}")
         else:
             # Refresh returned nothing — evict stale cache so next request fetches live
-            _warm_cache.pop(cache_key, None)
+            with _warm_cache_lock:
+                _warm_cache.pop(cache_key, None)
             print(f"[WARM_CACHE] Background refresh returned empty — evicted cache")
     except Exception as e:
         print(f"[WARM_CACHE] Background refresh error: {e}")
         # Evict cache on error so next request tries live fetch
-        _warm_cache.pop(cache_key, None)
+        with _warm_cache_lock:
+            _warm_cache.pop(cache_key, None)
     finally:
-        _background_refresh_in_progress.discard(cache_key)
+        with _warm_cache_lock:
+            _background_refresh_in_progress.discard(cache_key)
 
 
 # Warm cache TTL: serve from cache if < 10 min old, trigger background refresh if > 3 min old
@@ -906,45 +911,50 @@ def get_recommendations(user_id, prefs):
     3. If no cache, fetch live (blocking)
     4. Fallback chain: Google Places -> Local feeds -> DB cache -> Mock data
     """
-    import hashlib
-    import threading
-    global _warm_cache_lock
-    if _warm_cache_lock is None:
-        _warm_cache_lock = threading.Lock()
-    
     cache_key = _get_warm_cache_key(user_id, prefs)
     print(f"[RECOMMENDATIONS] Getting recommendations for user {user_id}, cache_key: {cache_key}")
-    
-    # Step 0: Check warm cache (stale-while-revalidate)
-    cached = _warm_cache.get(cache_key)
-    if cached:
-        age_seconds = (datetime.now() - cached['timestamp']).total_seconds()
-        if age_seconds < WARM_CACHE_STALE_SECONDS:
-            print(f"[WARM_CACHE] Hit! age={age_seconds:.0f}s, items={len(cached['items'])}")
-            # If stale (>5min), trigger background refresh
-            if age_seconds > WARM_CACHE_FRESH_SECONDS and cache_key not in _background_refresh_in_progress:
-                _background_refresh_in_progress.add(cache_key)
-                t = threading.Thread(
-                    target=_refresh_recommendations_background,
-                    args=(user_id, prefs, cache_key),
-                    daemon=True
-                )
-                t.start()
-                print(f"[WARM_CACHE] Triggered background refresh (stale)")
-            _record_served_impressions(user_id, cached['items'])
-            return cached['items'], cached['sources']
-    
+
+    # Step 0: Check warm cache (stale-while-revalidate). The read + stale check +
+    # refresh claim happen atomically under the lock so concurrent requests
+    # can't spawn duplicate background refreshes.
+    with _warm_cache_lock:
+        cached = _warm_cache.get(cache_key)
+        age_seconds = (datetime.now() - cached['timestamp']).total_seconds() if cached else None
+        serve_cached = cached is not None and age_seconds < WARM_CACHE_STALE_SECONDS
+        # If stale (>3min), claim the background refresh slot
+        start_refresh = (
+            serve_cached
+            and age_seconds > WARM_CACHE_FRESH_SECONDS
+            and cache_key not in _background_refresh_in_progress
+        )
+        if start_refresh:
+            _background_refresh_in_progress.add(cache_key)
+
+    if serve_cached:
+        print(f"[WARM_CACHE] Hit! age={age_seconds:.0f}s, items={len(cached['items'])}")
+        if start_refresh:
+            t = threading.Thread(
+                target=_refresh_recommendations_background,
+                args=(user_id, prefs, cache_key),
+                daemon=True
+            )
+            t.start()
+            print(f"[WARM_CACHE] Triggered background refresh (stale)")
+        _record_served_impressions(user_id, cached['items'])
+        return cached['items'], cached['sources']
+
     # No warm cache — fetch live (blocking)
     items, sources = _fetch_recommendations_live(user_id, prefs, cache_key)
-    
+
     # Store in warm cache
     if items:
-        _warm_cache[cache_key] = {
-            'items': items,
-            'sources': sources,
-            'timestamp': datetime.now()
-        }
-    
+        with _warm_cache_lock:
+            _warm_cache[cache_key] = {
+                'items': items,
+                'sources': sources,
+                'timestamp': datetime.now()
+            }
+
     _record_served_impressions(user_id, items)
     return items, sources
 
@@ -959,7 +969,6 @@ def enrich_items_with_images(items, max_time_seconds=4):
     import time
     
     start_time = time.time()
-    enriched_items = []
     
     def fetch_image_for_item(item):
         try:
@@ -1049,33 +1058,35 @@ def enrich_items_with_images(items, max_time_seconds=4):
             print(f"[IMAGE_ENRICH] Error enriching '{item.get('title', 'item')}': {e}")
             return item
     
+    # Collect results keyed by original position: rank order is preserved, and a
+    # timeout can't duplicate finished items or drop unfinished ones (the old
+    # positional-suffix logic did both because results arrive in completion order)
+    enriched_by_idx = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         # Submit all image search tasks
-        future_to_item = {executor.submit(fetch_image_for_item, item): item for item in items}
-        
+        future_to_idx = {executor.submit(fetch_image_for_item, item): idx for idx, item in enumerate(items)}
+
         # Collect results with timeout
         try:
-            for future in concurrent.futures.as_completed(future_to_item, timeout=max_time_seconds):
+            for future in concurrent.futures.as_completed(future_to_idx, timeout=max_time_seconds):
+                idx = future_to_idx[future]
                 try:
-                    enriched_item = future.result(timeout=0.5)
-                    enriched_items.append(enriched_item)
+                    enriched_by_idx[idx] = future.result(timeout=0.5)
                 except Exception as e:
-                    original_item = future_to_item[future]
-                    enriched_items.append(original_item)
+                    enriched_by_idx[idx] = items[idx]
                     print(f"[IMAGE_ENRICH] Error processing item: {e}")
-                
+
                 # Check overall time limit
                 if time.time() - start_time > max_time_seconds:
                     break
         except (TimeoutError, concurrent.futures.TimeoutError):
             print(f"[IMAGE_ENRICH] Global timeout after {time.time() - start_time:.1f}s")
-    
-    # Add any remaining items that didn't complete
-    completed_items = len(enriched_items)
-    if completed_items < len(items):
-        remaining_items = items[completed_items:]
-        enriched_items.extend(remaining_items)
-        print(f"[IMAGE_ENRICH] Timeout: enriched {completed_items}/{len(items)} items")
+
+    # Reassemble in original rank order; unfinished items pass through unchanged
+    enriched_items = [enriched_by_idx.get(idx, item) for idx, item in enumerate(items)]
+    unfinished = len(items) - len(enriched_by_idx)
+    if unfinished:
+        print(f"[IMAGE_ENRICH] Timeout: {unfinished}/{len(items)} items passed through unenriched")
     
     elapsed = time.time() - start_time
     success_count = sum(1 for item in enriched_items if item.get('photo_url'))
@@ -1267,6 +1278,12 @@ def _filter_recommendation_candidates(items, prefs, user_id):
     seen_place_ids = set()
     seen_title_keys = set()
 
+    # Load visited places once for the whole batch (was: one SQL query per candidate)
+    try:
+        visited_list = db.get_visited_list(user_id)
+    except Exception:
+        visited_list = []
+
     for item in items:
         title = item.get('title') or item.get('name') or ''
         if re.match(r'^test\s*[-–—:]', title, re.IGNORECASE):
@@ -1301,7 +1318,7 @@ def _filter_recommendation_candidates(items, prefs, user_id):
                 continue
 
         place_id = item.get('place_id')
-        if place_id and should_dedup(place_id, user_id, prefs):
+        if place_id and should_dedup(place_id, user_id, prefs, visited_list=visited_list):
             stats["visited"] += 1
             continue
         if place_id and place_id in seen_place_ids:
@@ -1813,13 +1830,19 @@ def get_enriched_mock_data(prefs, user_id, user_lat, user_lng):
     
     week = f"{datetime.now().year}-{datetime.now().isocalendar()[1]:02d}"
     
+    # Load visited places once for the whole batch (was: one SQL query per place)
+    try:
+        visited_list = db.get_visited_list(user_id)
+    except Exception:
+        visited_list = []
+
     for i, place in enumerate(MOCK_PLACES):
         # Apply category filter
         if categories and place['category'] not in categories:
             continue
-        
-        # Apply deduplication 
-        if should_dedup(place['place_id'], user_id, prefs):
+
+        # Apply deduplication
+        if should_dedup(place['place_id'], user_id, prefs, visited_list=visited_list):
             continue
         
         # Compute actual distance and travel time from user location
@@ -1871,21 +1894,25 @@ def get_enriched_mock_data(prefs, user_id, user_lat, user_lng):
     return mock_items
 
 
-def should_dedup(place_id, user_id, prefs):
-    """Check if a place should be deduplicated"""
+def should_dedup(place_id, user_id, prefs, visited_list=None):
+    """Check if a place should be deduplicated (visited within the dedup window).
+    Pass visited_list when checking many items to avoid one SQL query per call."""
     # Check explicit "already been"
-    visited = db.get_visited_list(user_id)
+    visited = visited_list if visited_list is not None else db.get_visited_list(user_id)
+    dedup_window = timedelta(days=prefs.get('dedup_window_days', 365))
     for visit in visited:
         if visit['place_id'] == place_id:
-            visited_at = datetime.fromisoformat(visit['visited_at'])
-            dedup_window = timedelta(days=prefs.get('dedup_window_days', 365))
+            try:
+                visited_at = datetime.fromisoformat(visit['visited_at'])
+            except (ValueError, TypeError):
+                continue
             if datetime.now() - visited_at < dedup_window:
                 return True
-    
+
     # Note: previously filtered recently recommended places (last 4 weeks),
     # but this was too aggressive and reduced result count. Removed — users
     # should see good places repeatedly. Only visited/been-there dedup remains.
-    
+
     return False
 
 # Average speed (mph) for deriving max distance from max travel time
